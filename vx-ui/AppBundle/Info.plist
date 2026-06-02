@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>vx</string>
+	<key>CFBundleExecutable</key>
+	<string>vx</string>
+	<key>CFBundleIconFile</key>
+	<string>vx</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.example.vx</string>
+	<key>CFBundleName</key>
+	<string>vx</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.35</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.35</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>vx listens for global shortcuts to trigger transcription.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>vx inserts transcription results into the active application.</string>
+	<key>NSHumanReadableDescription</key>
+	<string>Required for global fn key detection.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>vx needs access to your microphone to transcribe speech.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>

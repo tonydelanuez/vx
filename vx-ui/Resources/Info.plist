@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>vx</string>
+    <key>CFBundleName</key>
+    <string>vx</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.example.vx</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app transcribes your speech into text.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>vx inserts transcription results into the active application.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>vx listens for global shortcuts to trigger transcription.</string>
+</dict>
+</plist>
+

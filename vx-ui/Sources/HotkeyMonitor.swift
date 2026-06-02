@@ -1,0 +1,455 @@
+import AppKit
+import Carbon
+
+// MARK: - DoubleTapModifier
+
+/// The modifier key to double-tap as a shortcut trigger.
+/// Left and right sides are tracked separately so the user can bind, e.g., right Option only.
+enum DoubleTapModifier: String, CaseIterable, Equatable {
+    case leftOption
+    case rightOption
+    case leftCommand
+    case rightCommand
+    case leftControl
+    case rightControl
+    case leftShift
+    case rightShift
+
+    var keyCode: CGKeyCode {
+        switch self {
+        case .leftOption:   return CGKeyCode(kVK_Option)
+        case .rightOption:  return CGKeyCode(kVK_RightOption)
+        case .leftCommand:  return CGKeyCode(kVK_Command)
+        case .rightCommand: return CGKeyCode(kVK_RightCommand)
+        case .leftControl:  return CGKeyCode(kVK_Control)
+        case .rightControl: return CGKeyCode(kVK_RightControl)
+        case .leftShift:    return CGKeyCode(kVK_Shift)
+        case .rightShift:   return CGKeyCode(kVK_RightShift)
+        }
+    }
+
+    var modifierFlag: CGEventFlags {
+        switch self {
+        case .leftOption,   .rightOption:  return .maskAlternate
+        case .leftCommand,  .rightCommand: return .maskCommand
+        case .leftControl,  .rightControl: return .maskControl
+        case .leftShift,    .rightShift:   return .maskShift
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .leftOption:   return "⌥ ⌥  Left Option"
+        case .rightOption:  return "⌥ ⌥  Right Option"
+        case .leftCommand:  return "⌘ ⌘  Left Command"
+        case .rightCommand: return "⌘ ⌘  Right Command"
+        case .leftControl:  return "⌃ ⌃  Left Control"
+        case .rightControl: return "⌃ ⌃  Right Control"
+        case .leftShift:    return "⇧ ⇧  Left Shift"
+        case .rightShift:   return "⇧ ⇧  Right Shift"
+        }
+    }
+}
+
+// MARK: - Shortcut
+
+enum Shortcut: Equatable {
+    case combo(keyCode: CGKeyCode, modifiers: CGEventFlags)
+    case doubleTap(DoubleTapModifier)
+
+    /// Convenience initialiser matching the old struct API.
+    /// Handles the fn-key modifier promotion automatically.
+    init(keyCode: CGKeyCode, modifiers: CGEventFlags) {
+        if keyCode == CGKeyCode(kVK_Function) {
+            self = .combo(keyCode: keyCode, modifiers: modifiers.union(.maskSecondaryFn))
+        } else {
+            self = .combo(keyCode: keyCode, modifiers: modifiers)
+        }
+    }
+
+    static let optionSpace   = Shortcut.combo(keyCode: CGKeyCode(kVK_Space),  modifiers: [.maskAlternate])
+    static let commandShiftC = Shortcut.combo(keyCode: CGKeyCode(kVK_ANSI_C), modifiers: [.maskCommand, .maskShift])
+
+    var displayName: String {
+        switch self {
+        case .combo(let keyCode, let modifiers):
+            let modifierText = Shortcut.stringForModifiers(modifiers)
+            let keyText      = Shortcut.stringForKeyCode(keyCode)
+            let pieces = [modifierText, keyText].filter { !$0.isEmpty }
+            if pieces.isEmpty, keyCode == CGKeyCode(kVK_Function) { return "fn" }
+            return pieces.joined(separator: " ")
+        case .doubleTap(let modifier):
+            return modifier.displayName
+        }
+    }
+
+    /// Single-character string suitable for NSMenuItem.keyEquivalent (empty if not mappable).
+    var menuKeyEquivalent: String {
+        switch self {
+        case .combo(let keyCode, _): return keyCodeToString(keyCode)?.lowercased() ?? ""
+        case .doubleTap:             return ""
+        }
+    }
+
+    /// Modifier mask suitable for NSMenuItem.keyEquivalentModifierMask.
+    var menuKeyEquivalentModifierMask: NSEvent.ModifierFlags {
+        switch self {
+        case .combo(_, let modifiers):
+            var mask: NSEvent.ModifierFlags = []
+            if modifiers.contains(.maskCommand)   { mask.insert(.command) }
+            if modifiers.contains(.maskShift)     { mask.insert(.shift) }
+            if modifiers.contains(.maskAlternate) { mask.insert(.option) }
+            if modifiers.contains(.maskControl)   { mask.insert(.control) }
+            return mask
+        case .doubleTap:
+            return []
+        }
+    }
+
+    func serialize() -> String {
+        switch self {
+        case .combo(let keyCode, let modifiers):
+            return "\(keyCode):\(modifiers.rawValue)"
+        case .doubleTap(let modifier):
+            return "doubletap:\(modifier.rawValue)"
+        }
+    }
+
+    static func deserialize(_ value: String) -> Shortcut? {
+        if value.hasPrefix("doubletap:") {
+            let raw = String(value.dropFirst("doubletap:".count))
+            return DoubleTapModifier(rawValue: raw).map { .doubleTap($0) }
+        }
+        let parts = value.split(separator: ":")
+        guard parts.count == 2,
+              let code = UInt32(parts[0]),
+              let flagsValue = UInt64(parts[1]) else { return nil }
+        return Shortcut(keyCode: CGKeyCode(code), modifiers: CGEventFlags(rawValue: flagsValue))
+    }
+
+    private static func stringForModifiers(_ flags: CGEventFlags) -> String {
+        var pieces: [String] = []
+        if flags.contains(.maskCommand)     { pieces.append("⌘") }
+        if flags.contains(.maskShift)       { pieces.append("⇧") }
+        if flags.contains(.maskAlternate)   { pieces.append("⌥") }
+        if flags.contains(.maskControl)     { pieces.append("⌃") }
+        if flags.contains(.maskSecondaryFn) { pieces.append("fn") }
+        return pieces.joined(separator: " ")
+    }
+
+    private static func stringForKeyCode(_ keyCode: CGKeyCode) -> String {
+        switch Int(keyCode) {
+        case kVK_Space:    return "Space"
+        case kVK_Return:   return "Return"
+        case kVK_Escape:   return "Esc"
+        case kVK_Delete:   return "Delete"
+        case kVK_Function: return ""
+        default:
+            if let string = keyCodeToString(keyCode) { return string.uppercased() }
+            return "#\(keyCode)"
+        }
+    }
+}
+
+// MARK: - GlobalShortcutMonitor
+
+final class GlobalShortcutMonitor {
+    enum Event {
+        case keyDown
+        case keyUp
+    }
+
+    private let keyCode: CGKeyCode
+    private let modifiers: CGEventFlags
+    private let handler: (Event) -> Void
+
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var monitorQueue: DispatchQueue?
+    private var isPressed = false
+    private var fnPressed = false
+
+    init(keyCode: CGKeyCode, modifiers: CGEventFlags, handler: @escaping (Event) -> Void) {
+        self.keyCode   = keyCode
+        self.modifiers = modifiers
+        self.handler   = handler
+    }
+
+    func start() {
+        guard eventTap == nil else { return }
+
+        let mask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
+            | (1 << CGEventType.flagsChanged.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo = userInfo else { return Unmanaged.passUnretained(event) }
+            let monitor = Unmanaged<GlobalShortcutMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+            if monitor.handle(event: event, type: type) {
+                return Unmanaged.passUnretained(event)
+            } else {
+                return nil
+            }
+        }
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(mask),
+            callback: callback,
+            userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        ) else {
+            NSLog("[vx-ui] Failed to create global shortcut monitor")
+            return
+        }
+
+        eventTap = tap
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+
+        monitorQueue = DispatchQueue(label: "voice.vx.hotkey", qos: .userInteractive)
+        monitorQueue?.async { [weak self] in
+            guard let self, let runLoopSource = self.runLoopSource else { return }
+            let runLoop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(runLoop, runLoopSource, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            CFRunLoopRun()
+        }
+    }
+
+    func stop() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+        }
+        runLoopSource = nil
+        eventTap = nil
+        monitorQueue = nil
+        isPressed = false
+        fnPressed = false
+    }
+
+    @discardableResult
+    private func handle(event: CGEvent, type: CGEventType) -> Bool {
+        if type == .flagsChanged {
+            return handleFlagsChanged(event: event)
+        }
+
+        guard type == .keyDown || type == .keyUp else { return true }
+
+        let relevantFlags: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]
+        let flags = event.flags.intersection(relevantFlags)
+        let eventKeyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if eventKeyCode == CGKeyCode(kVK_Function) {
+            return true
+        }
+
+        guard eventKeyCode == keyCode, flags == modifiers else {
+            return true
+        }
+
+        switch type {
+        case .keyDown:
+            if !isPressed {
+                isPressed = true
+                handler(.keyDown)
+            }
+        case .keyUp:
+            if isPressed {
+                isPressed = false
+                handler(.keyUp)
+            }
+        default:
+            break
+        }
+
+        return false
+    }
+
+    private func handleFlagsChanged(event: CGEvent) -> Bool {
+        let eventKeyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        let relevantFlags: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]
+        let flags = event.flags.intersection(relevantFlags)
+
+        if modifiers.contains(.maskSecondaryFn) && eventKeyCode == CGKeyCode(kVK_Function) {
+            let pressed = flags.contains(.maskSecondaryFn)
+            if pressed && flags == modifiers {
+                if !fnPressed {
+                    fnPressed = true
+                    handler(.keyDown)
+                }
+                return false
+            } else if fnPressed && (!pressed || flags != modifiers) {
+                fnPressed = false
+                handler(.keyUp)
+                return false
+            }
+        }
+
+        if eventKeyCode == CGKeyCode(kVK_Function) {
+            return false
+        }
+
+        return true
+    }
+}
+
+// MARK: - DoubleTapMonitor
+
+/// Detects when the user double-taps a single modifier key (e.g. right Option twice)
+/// and fires keyDown / keyUp events mirroring GlobalShortcutMonitor's pattern.
+///
+/// Detection:
+///   1. First modifier press + release  → window opens
+///   2. Second modifier press within 0.4 s → fires .keyDown
+///   3. Second modifier release          → fires .keyUp
+///
+/// All flagsChanged events for the watched key are swallowed so single taps
+/// do not leak modifier state into other apps.
+final class DoubleTapMonitor {
+    enum Event { case keyDown, keyUp }
+
+    private let modifier: DoubleTapModifier
+    private let handler: (Event) -> Void
+    private let doubleTapWindow: TimeInterval = 0.4
+
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var monitorQueue: DispatchQueue?
+
+    // State — accessed only from monitorQueue's run loop
+    private var firstTapReleasedAt: Date? = nil
+    private var isModifierDown = false
+    private var isActivated = false
+
+    init(modifier: DoubleTapModifier, handler: @escaping (Event) -> Void) {
+        self.modifier = modifier
+        self.handler  = handler
+    }
+
+    func start() {
+        guard eventTap == nil else { return }
+
+        let mask = 1 << CGEventType.flagsChanged.rawValue
+        let callback: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo else { return Unmanaged.passUnretained(event) }
+            let monitor = Unmanaged<DoubleTapMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+            return monitor.handle(event: event, type: type)
+        }
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(mask),
+            callback: callback,
+            userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        ) else {
+            vxLog("[doubletap/start] Failed to create CGEventTap")
+            return
+        }
+
+        eventTap = tap
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+
+        monitorQueue = DispatchQueue(label: "voice.vx.doubletap", qos: .userInteractive)
+        monitorQueue?.async { [weak self] in
+            guard let self, let source = self.runLoopSource else { return }
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            CFRunLoopRun()
+        }
+    }
+
+    func stop() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+        }
+        runLoopSource = nil
+        eventTap = nil
+        monitorQueue = nil
+        firstTapReleasedAt = nil
+        isModifierDown = false
+        isActivated = false
+    }
+
+    private func handle(event: CGEvent, type: CGEventType) -> Unmanaged<CGEvent>? {
+        guard type == .flagsChanged else { return Unmanaged.passUnretained(event) }
+
+        let eventKeyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        guard eventKeyCode == modifier.keyCode else { return Unmanaged.passUnretained(event) }
+
+        let isDown = event.flags.contains(modifier.modifierFlag)
+
+        if isDown && !isModifierDown {
+            isModifierDown = true
+            if !isActivated,
+               let released = firstTapReleasedAt,
+               Date().timeIntervalSince(released) < doubleTapWindow {
+                // Second tap within window — activate
+                firstTapReleasedAt = nil
+                isActivated = true
+                handler(.keyDown)
+            } else {
+                // First tap (or window expired) — reset
+                firstTapReleasedAt = nil
+            }
+        } else if !isDown && isModifierDown {
+            isModifierDown = false
+            if isActivated {
+                isActivated = false
+                handler(.keyUp)
+            } else {
+                // First tap released — open window for second tap
+                firstTapReleasedAt = Date()
+            }
+        }
+
+        return nil  // Swallow all flagsChanged events for this key
+    }
+}
+
+// MARK: - keyCodeToString
+
+private func keyCodeToString(_ keyCode: CGKeyCode) -> String? {
+    var layout: TISInputSource?
+    let result = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue()
+    layout = result
+
+    guard let source = layout,
+          let rawLayoutData = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+        return nil
+    }
+
+    let layoutData = Unmanaged<CFData>.fromOpaque(rawLayoutData).takeUnretainedValue() as Data
+    guard let keyLayout = layoutData.withUnsafeBytes({ $0.bindMemory(to: UCKeyboardLayout.self).baseAddress }) else {
+        return nil
+    }
+
+    var deadKeyState: UInt32 = 0
+    let maxLength = 2
+    var chars = [UniChar](repeating: 0, count: maxLength)
+    var actualLength = 0
+
+    let modifiers = UInt32(0)
+    let error = UCKeyTranslate(
+        keyLayout,
+        UInt16(keyCode),
+        UInt16(kUCKeyActionDisplay),
+        modifiers,
+        UInt32(LMGetKbdType()),
+        UInt32(kUCKeyTranslateNoDeadKeysBit),
+        &deadKeyState,
+        maxLength,
+        &actualLength,
+        &chars
+    )
+
+    guard error == noErr else { return nil }
+    return String(utf16CodeUnits: chars, count: actualLength)
+}

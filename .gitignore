@@ -1,0 +1,27 @@
+# macOS metadata
+.DS_Store
+
+# Swift/SwiftPM build output
+.build/
+.swiftpm/
+DerivedData/
+*.dSYM/
+
+# App bundle artifacts created by package scripts
+vx-ui/build/
+
+# Swift Package Manager intermediates inside vx-ui
+vx-ui/.build/
+
+# Rust/Cargo build output
+vx-rs/target/
+
+# General IDE cruft
+*.swp
+*.swo
+
+# Models
+vx-ui/Resources/Models/
+
+# Binaries
+vx-ui/Resources/Backend/vx-rs

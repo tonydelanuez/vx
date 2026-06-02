@@ -1,0 +1,4 @@
+[env]
+# Use pre-generated bindings to avoid bindgen issues
+WHISPER_DONT_GENERATE_BINDINGS = "1"
+

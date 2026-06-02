@@ -1,0 +1,16 @@
+[package]
+name = "vx-rs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+hound = "3.5"
+libc = "0.2"
+num_cpus = "1.17"
+# `metal` enables the Apple Silicon GPU backend. whisper.cpp embeds the Metal
+# shader into the binary, so no external .metallib is shipped in the app bundle.
+whisper-rs = { version = "0.15.1", features = ["metal"] }
+crossbeam-channel = "0.5"
