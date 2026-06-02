@@ -8,7 +8,7 @@ import Foundation
 /// and releases repo.
 enum DistributionConfig {
     /// GitHub "owner/repo" hosting the published release assets (vx.zip).
-    static let releasesRepo = "tonydelanuez/vx-releases"
+    static let releasesRepo = "tonydelanuez/vx"
 
     /// Ed25519 public key (raw 32 bytes) used to verify downloaded update
     /// artifacts. The matching private key signs `vx.zip` at release time and is
