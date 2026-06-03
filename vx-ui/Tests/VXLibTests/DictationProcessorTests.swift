@@ -36,6 +36,16 @@ final class DictationProcessorTests: XCTestCase {
         XCTAssertEqual(DictationProcessor.sanitize("hello\n  world   foo"), "hello world foo")
     }
 
+    func testSanitizeDropsPunctuationOnlyOutput() {
+        // Whisper occasionally emits a bare dash (or other punctuation) on quiet
+        // audio. With no letters or digits it isn't speech, so it must not be pasted.
+        for junk in ["-", "--", "...", " - ", "\u{2014}", "?!"] {
+            XCTAssertEqual(DictationProcessor.sanitize(junk), "", "should drop: \(junk)")
+        }
+        // Real text with punctuation is untouched.
+        XCTAssertEqual(DictationProcessor.sanitize("well - maybe"), "well - maybe")
+    }
+
     // MARK: - process
 
     func testProcessReturnsNoSpeechWhenSanitizationEmpties() async {

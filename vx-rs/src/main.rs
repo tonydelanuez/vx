@@ -315,6 +315,12 @@ fn run_stream(cfg: StdinStreamConfig) -> Result<(), Box<dyn Error>> {
 fn is_silence_hallucination(text: &str) -> bool {
     let lower = text.trim().to_lowercase();
 
+    // No letters or digits — a bare dash, "...", music notes, etc. Whisper emits
+    // these on near-silent audio; they are never real speech.
+    if !lower.chars().any(|c| c.is_alphanumeric()) {
+        return true;
+    }
+
     // Strip leading/trailing punctuation for exact-match checks.
     let normalized: &str = lower
         .trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace());
@@ -565,6 +571,21 @@ mod tests {
                 is_silence_hallucination(phrase),
                 "Expected hallucination for: {:?}",
                 phrase
+            );
+        }
+    }
+
+    #[test]
+    fn hallucination_filter_catches_punctuation_only() {
+        // Whisper sometimes emits a bare dash (or other punctuation) on near-silent
+        // audio. With nothing but punctuation/whitespace it isn't speech, so it must
+        // be filtered rather than pasted as a stray "-".
+        let junk = ["-", "--", "...", ".", " - ", "—", "?!"];
+        for s in &junk {
+            assert!(
+                is_silence_hallucination(s),
+                "Expected punctuation-only output to be filtered: {:?}",
+                s
             );
         }
     }

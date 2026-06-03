@@ -188,6 +188,9 @@ struct DictationProcessor {
         result = result.components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+        // Punctuation-only output (a bare dash, "...", music left-overs) isn't
+        // speech — drop it so it's never pasted.
+        guard result.contains(where: { $0.isLetter || $0.isNumber }) else { return "" }
         return result
     }
 }
