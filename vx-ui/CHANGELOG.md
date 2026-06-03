@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [v1.0.36] - 2026-06-03
 
 ### Changed
 - Auto-updates are now cryptographically verified. Each release is signed with an Ed25519 key, and vx checks the signature against a key built into the app before installing an update — so a tampered or spoofed download (even from a compromised release host) is refused. Applies to both normal updates and version-history rollbacks.

@@ -13,9 +13,9 @@
 	<key>CFBundleName</key>
 	<string>vx</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.35</string>
+	<string>1.0.36</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.35</string>
+	<string>1.0.36</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSAccessibilityUsageDescription</key>
