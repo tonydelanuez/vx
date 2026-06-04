@@ -1,16 +1,40 @@
 import AppKit
+import Darwin
 import Foundation
 import VXLib
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var coordinator: AppCoordinator?
+    private let watchdogQueue = DispatchQueue(label: "com.vx.watchdog")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         logEnvironmentDiagnostics()
         NSApp.setActivationPolicy(.accessory)
         setupMainMenu()
         coordinator = AppCoordinator(appState: appState)
+        startMainThreadWatchdog()
+    }
+
+    /// Safety net for a wedged main thread. vx is an accessory (menu-bar) app, so a hung
+    /// process never appears in Force Quit — the only recourse would otherwise be Activity
+    /// Monitor. If the main thread stops servicing work for `timeout` seconds (far longer
+    /// than any legitimate operation — transcription runs in a subprocess, off-main),
+    /// self-terminate so the process can't become an un-quittable zombie.
+    private func startMainThreadWatchdog() {
+        let q = watchdogQueue
+        let interval: TimeInterval = 3
+        let timeout: TimeInterval = 12
+        func tick() {
+            let sema = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async { sema.signal() }
+            if sema.wait(timeout: .now() + timeout) == .timedOut {
+                NSLog("[vx-ui] WATCHDOG: main thread unresponsive for %.0fs — killing the process to avoid a wedged, un-force-quittable app.", timeout)
+                kill(getpid(), SIGKILL)
+            }
+            q.asyncAfter(deadline: .now() + interval) { tick() }
+        }
+        q.async { tick() }
     }
 
     /// Installs a minimal main menu so that standard text-editing keyboard shortcuts

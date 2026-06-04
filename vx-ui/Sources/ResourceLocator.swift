@@ -87,7 +87,24 @@ public enum ResourceLocator {
             return URL(fileURLWithPath: "/tmp/\(name).\(modelExtension)")
         }
         #endif
-        fatalError("Model \(name).\(modelExtension) not found in app bundle or workspace")
+
+        // No bundled or workspace model. Distributed builds don't bundle one — models are
+        // downloaded into Application Support and resolved via ModelManager — so fall back to
+        // the user models directory rather than crashing the app on launch. Return the
+        // expected path even if it doesn't exist yet; callers that need a real file check
+        // existence (and ModelManager handles downloading).
+        let userModels = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("vx/\(modelSubdirectory)/\(name).\(modelExtension)")
+        if let userModels {
+            if FileManager.default.fileExists(atPath: userModels.path) {
+                cachedModelURL = userModels
+            } else {
+                vxLog("[resource/modelURL] '\(name).\(modelExtension)' not bundled and not yet downloaded; returning expected Application Support path")
+            }
+            return userModels
+        }
+        return URL(fileURLWithPath: "/tmp/\(name).\(modelExtension)")
     }
 
     public static func refreshCaches() {

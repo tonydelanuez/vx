@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreAudio
+import CoreMedia
 import Combine
 import Foundation
 
@@ -23,8 +24,65 @@ enum AudioCaptureError: LocalizedError {
     }
 }
 
+/// Converts AVCaptureSession audio sample buffers (device-native format) to 16 kHz mono f32,
+/// forwards them, and publishes a normalized level. Runs on the capture queue (off main).
+private final class AudioSampleDelegate: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    private let level: CurrentValueSubject<Double, Never>
+    private let onSamples: ([Float]) -> Void
+    private let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    private var converter: AVAudioConverter?
+    private var loggedFormat = false
+
+    init(level: CurrentValueSubject<Double, Never>, onSamples: @escaping ([Float]) -> Void) {
+        self.level = level
+        self.onSamples = onSamples
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let fmtDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmtDesc),
+              let inFormat = AVAudioFormat(streamDescription: asbd) else { return }
+        if !loggedFormat {
+            loggedFormat = true
+            vxLog("[audio/capture] Device format: \(Int(inFormat.sampleRate))Hz \(inFormat.channelCount)ch")
+        }
+        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+        guard frames > 0, let inBuf = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: frames) else { return }
+        inBuf.frameLength = frames
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer, at: 0, frameCount: Int32(frames), into: inBuf.mutableAudioBufferList
+        ) == noErr else { return }
+
+        if converter == nil { converter = AVAudioConverter(from: inFormat, to: target) }
+        guard let converter else { return }
+        let capacity = AVAudioFrameCount(Double(frames) * target.sampleRate / inFormat.sampleRate + 1)
+        guard let outBuf = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+        var consumed = false
+        converter.convert(to: outBuf, error: nil) { _, status in
+            if consumed { status.pointee = .noDataNow; return nil }
+            consumed = true
+            status.pointee = .haveData
+            return inBuf
+        }
+        guard let data = outBuf.floatChannelData, outBuf.frameLength > 0 else { return }
+        let n = Int(outBuf.frameLength)
+        let samples = Array(UnsafeBufferPointer(start: data[0], count: n))
+        onSamples(samples)
+
+        // Normalized RMS for the HUD level meter.
+        var sumSq: Float = 0
+        for s in samples { sumSq += s * s }
+        let rms = (sumSq / Float(n)).squareRoot()
+        let db = rms > 0 ? 20 * log10(rms) : -160
+        level.send(Double(max(0, min(1, (db + 60) / 60))))
+    }
+}
+
 final class AudioCapture {
     private var engine: AVAudioEngine?
+    private var captureSession: AVCaptureSession?
+    private var captureDelegate: AudioSampleDelegate?
+    private var captureErrorObserver: NSObjectProtocol?
     private var currentURL: URL?
     private let levelSubject = CurrentValueSubject<Double, Never>(0)
 
@@ -48,6 +106,16 @@ final class AudioCapture {
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("vx-dictation-\(UUID().uuidString).wav")
+
+        // For an explicitly-selected input device, capture via AVCaptureSession instead of
+        // AVAudioEngine. AVAudioEngine's IO unit couples the input to the output device, so
+        // forcing a different input (the Yeti) while a Bluetooth device is the output fails
+        // with kAudioUnitErr_FormatNotSupported (-10868). AVCaptureSession records from a
+        // chosen device independent of the output, sidestepping that entirely. The system-
+        // default path (no device chosen) keeps using AVAudioEngine.
+        if let session, let uid = deviceUID, let device = AVCaptureDevice(uniqueID: uid) {
+            return try startCaptureSession(device: device, sink: session, url: url)
+        }
 
         let engine = AVAudioEngine()
 
@@ -181,7 +249,17 @@ final class AudioCapture {
             }
         }
 
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // Tear the half-built engine down so a failed start never leaks an audio unit
+            // bound to the HAL. Leaked units from repeated failures (common when a Bluetooth
+            // output device is mid A2DP<->SCO transition and start() fails with -10868)
+            // accumulate and eventually wedge CoreAudio, hanging the whole app.
+            inputNode.removeTap(onBus: 0)
+            engine.stop()
+            throw error
+        }
 
         self.engine = engine
         self.currentURL = url
@@ -190,7 +268,81 @@ final class AudioCapture {
         return url
     }
 
+    /// Streaming capture from an explicitly-chosen device via AVCaptureSession — records from
+    /// the device independent of the output device, so it works when a different (e.g.
+    /// Bluetooth) device is the system output, unlike the AVAudioEngine input-device override.
+    private func startCaptureSession(device: AVCaptureDevice, sink: TranscriptionSession, url: URL) throws -> URL {
+        let capture = AVCaptureSession()
+
+        let input: AVCaptureDeviceInput
+        do {
+            input = try AVCaptureDeviceInput(device: device)
+        } catch {
+            vxLog("[audio/capture] Could not open input '\(device.localizedName)': \(error.localizedDescription)")
+            throw AudioCaptureError.captureUnavailable
+        }
+        guard capture.canAddInput(input) else {
+            vxLog("[audio/capture] Cannot add input '\(device.localizedName)'")
+            throw AudioCaptureError.captureUnavailable
+        }
+        capture.addInput(input)
+
+        let output = AVCaptureAudioDataOutput()
+        // Ask for 32-bit float PCM. The Yeti's native format is 16-bit integer, and converting
+        // that to float in the delegate was mis-scaling it to near-silence; requesting float
+        // here lets the capture pipeline hand us samples we don't have to reinterpret.
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        guard capture.canAddOutput(output) else {
+            vxLog("[audio/capture] Cannot add audio output")
+            throw AudioCaptureError.captureUnavailable
+        }
+        let delegate = AudioSampleDelegate(level: levelSubject) { [weak sink] samples in
+            sink?.write(samples: samples)
+        }
+        output.setSampleBufferDelegate(delegate, queue: DispatchQueue(label: "com.vx.capture.audio"))
+        capture.addOutput(output)
+
+        // The session reports failures asynchronously (it doesn't throw) — log them.
+        captureErrorObserver = NotificationCenter.default.addObserver(
+            forName: .AVCaptureSessionRuntimeError, object: capture, queue: nil
+        ) { note in
+            let err = note.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            vxLog("[audio/capture] Runtime error: \(err?.localizedDescription ?? "unknown")")
+        }
+
+        capture.startRunning()
+        guard capture.isRunning else {
+            vxLog("[audio/capture] Session did not start running")
+            if let obs = captureErrorObserver { NotificationCenter.default.removeObserver(obs); captureErrorObserver = nil }
+            throw AudioCaptureError.captureUnavailable
+        }
+
+        self.captureSession = capture
+        self.captureDelegate = delegate
+        self.currentURL = url
+        levelSubject.send(0)
+        vxLog("[audio/capture] Capturing from '\(device.localizedName)' via AVCaptureSession")
+        return url
+    }
+
     func stopRecording() -> URL? {
+        if let capture = captureSession {
+            capture.stopRunning()
+            captureSession = nil
+            captureDelegate = nil
+            if let obs = captureErrorObserver { NotificationCenter.default.removeObserver(obs); captureErrorObserver = nil }
+            let url = currentURL
+            currentURL = nil
+            levelSubject.send(0)
+            if let url { vxLog("[audio/stopRecording] Stopped capture session: \(url.lastPathComponent)") }
+            return url
+        }
         guard let engine else { return nil }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()

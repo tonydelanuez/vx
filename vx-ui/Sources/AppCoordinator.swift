@@ -528,12 +528,33 @@ public final class AppCoordinator: NSObject {
             return
         }
 
+        // Start the audio engine, retrying a few times. When a Bluetooth output device
+        // (e.g. WH-1000XM3) flips between A2DP and HFP/SCO as input capture begins,
+        // engine.start() intermittently fails with kAudioUnitErr_FormatNotSupported (-10868).
+        // A short settle delay plus a fresh engine usually succeeds, and each failed attempt
+        // tears itself down cleanly (AudioCapture.startRecording), so retries don't leak or
+        // wedge CoreAudio.
         let engineStartTime = Date()
-        do {
-            currentRecordingURL = try audioCapture.startRecording(
-                deviceUID: appState.selectedInputDeviceUID,
-                session: stream
-            )
+        let maxAttempts = 3
+        var startError: Error?
+        var started = false
+        for attempt in 1...maxAttempts {
+            do {
+                currentRecordingURL = try audioCapture.startRecording(
+                    deviceUID: appState.selectedInputDeviceUID,
+                    session: stream
+                )
+                started = true
+                if attempt > 1 { vxLog("[coordinator/beginRecording] start succeeded on attempt \(attempt)/\(maxAttempts)") }
+                break
+            } catch {
+                startError = error
+                vxLog("[coordinator/beginRecording] start attempt \(attempt)/\(maxAttempts) failed: \(error.localizedDescription)")
+                if attempt < maxAttempts { Thread.sleep(forTimeInterval: 0.25) }
+            }
+        }
+
+        if started {
             // Engine is running and tap is installed — safe to duck BT devices now.
             if duckEnabled && bluetoothOutput {
                 let t0 = Date()
@@ -550,13 +571,12 @@ public final class AppCoordinator: NSObject {
                 onCancel: { [weak self] in self?.cancelRecording() },
                 onStop: { [weak self] in self?.finishRecording() }
             )
-        } catch {
-            // Engine failed to start — kill streaming process and undo duck.
+        } else {
+            // Couldn't start after retries — kill the streaming process and undo any duck.
             stream.cancel()
-            if duckEnabled {
-                volumeController.restore()
-            }
-            logFailure(error.localizedDescription, dismissAfter: 2.0)
+            if duckEnabled { volumeController.restore() }
+            vxLog("[coordinator/beginRecording] giving up after \(maxAttempts) attempts: \(startError?.localizedDescription ?? "unknown error")")
+            logFailure("Couldn’t start the microphone. If you’re on Bluetooth headphones it may be switching audio modes — try again in a moment.", dismissAfter: 3.0)
         }
 
         vxLog("[coordinator/beginRecording] Backend: \(backendURL.path)")
