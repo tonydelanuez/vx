@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.37] - 2026-06-05
+
+### Fixed
+- Dictation now works when an external microphone is used while audio output is routed to Bluetooth headphones (e.g. a Blue Yeti while listening on WH-1000XM3). Previously the audio engine failed to start with a "The operation couldn't be completed" error because macOS can't run split input/output through the same audio unit. vx now captures from the chosen input device independently of the output device.
+- The app no longer hangs requiring Activity Monitor to force-quit when audio capture fails repeatedly. Recording start is retried briefly, surfaces a friendly message on failure, and a main-thread watchdog terminates the process if it ever wedges for more than a few seconds.
+- Fresh installs no longer crash on launch when no Whisper model is bundled. vx now bundles `ggml-tiny.en` and falls back gracefully to the downloaded-models directory.
+
+### Changed
+- vx is now signed with a Developer ID certificate and notarized by Apple, so it launches without the "unidentified developer" / Gatekeeper warning.
+
 ## [v1.0.36] - 2026-06-03
 
 ### Changed

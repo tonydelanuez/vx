@@ -12,10 +12,12 @@
 	<string>com.example.vx</string>
 	<key>CFBundleName</key>
 	<string>vx</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.36</string>
+	<string>1.0.37</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.36</string>
+	<string>1.0.37</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSAccessibilityUsageDescription</key>
