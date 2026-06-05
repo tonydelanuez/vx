@@ -81,8 +81,21 @@ public final class AppState: ObservableObject {
     }
 
     @Published var activationMode: ActivationMode {
-        didSet { saveActivationMode() }
+        didSet {
+            saveActivationMode()
+            // Double-tap is a toggle-only gesture — you can't "hold" a double-tap. If the
+            // user switches to hold-to-talk while a double-tap binding is set, clear it
+            // (revert to the default) and surface a notice explaining why.
+            if activationMode == .holdToTalk, case .doubleTap = shortcut {
+                shortcut = .optionSpace
+                shortcutNotice = "Double-tap shortcuts only work in toggle mode, so your shortcut was reset to \(Shortcut.optionSpace.displayName). Pick a key combo or a single modifier to hold."
+            }
+        }
     }
+
+    /// A transient, user-facing notice about an automatic shortcut change. Set by
+    /// AppState when it has to adjust a binding; the UI presents and clears it.
+    @Published var shortcutNotice: String?
 
     @Published var isDebugMode: Bool {
         didSet { defaults.set(isDebugMode, forKey: "vx.debug-mode") }
@@ -194,6 +207,14 @@ public final class AppState: ObservableObject {
         // Remove legacy overrides that pointed to build-relative paths.
         defaults.removeObject(forKey: "vx.cli-path")
         defaults.removeObject(forKey: "vx.model-path")
+
+        // Enforce the invariant that hold-to-talk never pairs with a double-tap binding
+        // (e.g. from an older persisted state). didSet doesn't fire during init, so do it
+        // here and persist the corrected value.
+        if activationMode == .holdToTalk, case .doubleTap = shortcut {
+            shortcut = .optionSpace
+            defaults.set(shortcut.serialize(), forKey: shortcutKey)
+        }
     }
 
     public var backendURL: URL {

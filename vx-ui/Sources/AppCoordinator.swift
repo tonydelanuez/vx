@@ -39,6 +39,7 @@ public final class AppCoordinator: NSObject {
     private var recordingTargetPID: pid_t = 0
     private var shortcutMonitor: GlobalShortcutMonitor?
     private var doubleTapMonitor: DoubleTapMonitor?
+    private var modifierMonitor: ModifierKeyMonitor?
     private var copyLastMonitor: GlobalShortcutMonitor?
     private var transcriptionTask: Task<Void, Never>?
     private var currentRecordingURL: URL?
@@ -113,6 +114,7 @@ public final class AppCoordinator: NSObject {
     public func invalidate() {
         shortcutMonitor?.stop()
         doubleTapMonitor?.stop()
+        modifierMonitor?.stop()
         copyLastMonitor?.stop()
         transcriptionTask?.cancel()
         FnKeyTap.shared.deactivate()
@@ -139,6 +141,8 @@ public final class AppCoordinator: NSObject {
                 self?.shortcutMonitor = nil
                 self?.doubleTapMonitor?.stop()
                 self?.doubleTapMonitor = nil
+                self?.modifierMonitor?.stop()
+                self?.modifierMonitor = nil
                 self?.copyLastMonitor?.stop()
                 self?.copyLastMonitor = nil
             }
@@ -251,6 +255,8 @@ public final class AppCoordinator: NSObject {
         shortcutMonitor = nil
         doubleTapMonitor?.stop()
         doubleTapMonitor = nil
+        modifierMonitor?.stop()
+        modifierMonitor = nil
         FnKeyTap.shared.deactivate()
         setupShortcut()
     }
@@ -380,7 +386,16 @@ public final class AppCoordinator: NSObject {
             shortcutMonitor = monitor
 
         case .doubleTap(let modifier):
+            // Double-tap is toggle-only; AppState guarantees it never pairs with hold-to-talk.
             let monitor = DoubleTapMonitor(modifier: modifier) { [weak self] event in
+                guard event == .keyDown else { return }
+                DispatchQueue.main.async { self?.toggleRecording() }
+            }
+            monitor.start()
+            doubleTapMonitor = monitor
+
+        case .modifier(let modifier):
+            let monitor = ModifierKeyMonitor(modifier: modifier) { [weak self] event in
                 guard let self else { return }
                 switch (self.appState.activationMode, event) {
                 case (.holdToTalk, .keyDown): DispatchQueue.main.async { self.beginRecording() }
@@ -390,7 +405,7 @@ public final class AppCoordinator: NSObject {
                 }
             }
             monitor.start()
-            doubleTapMonitor = monitor
+            modifierMonitor = monitor
         }
     }
 

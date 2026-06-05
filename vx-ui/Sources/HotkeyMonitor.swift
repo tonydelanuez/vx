@@ -1,11 +1,11 @@
 import AppKit
 import Carbon
 
-// MARK: - DoubleTapModifier
+// MARK: - ModifierKey
 
-/// The modifier key to double-tap as a shortcut trigger.
+/// A modifier key usable as a shortcut trigger (single-press, held, or double-tapped).
 /// Left and right sides are tracked separately so the user can bind, e.g., right Option only.
-enum DoubleTapModifier: String, CaseIterable, Equatable {
+enum ModifierKey: String, CaseIterable, Equatable {
     case leftOption
     case rightOption
     case leftCommand
@@ -37,25 +37,48 @@ enum DoubleTapModifier: String, CaseIterable, Equatable {
         }
     }
 
-    var displayName: String {
+    /// The glyph for this modifier (⌥ / ⌘ / ⌃ / ⇧).
+    var symbol: String {
         switch self {
-        case .leftOption:   return "⌥ ⌥  Left Option"
-        case .rightOption:  return "⌥ ⌥  Right Option"
-        case .leftCommand:  return "⌘ ⌘  Left Command"
-        case .rightCommand: return "⌘ ⌘  Right Command"
-        case .leftControl:  return "⌃ ⌃  Left Control"
-        case .rightControl: return "⌃ ⌃  Right Control"
-        case .leftShift:    return "⇧ ⇧  Left Shift"
-        case .rightShift:   return "⇧ ⇧  Right Shift"
+        case .leftOption,  .rightOption:  return "⌥"
+        case .leftCommand, .rightCommand: return "⌘"
+        case .leftControl, .rightControl: return "⌃"
+        case .leftShift,   .rightShift:   return "⇧"
         }
     }
+
+    /// Human label with side, e.g. "Right Option".
+    var sideName: String {
+        switch self {
+        case .leftOption:   return "Left Option"
+        case .rightOption:  return "Right Option"
+        case .leftCommand:  return "Left Command"
+        case .rightCommand: return "Right Command"
+        case .leftControl:  return "Left Control"
+        case .rightControl: return "Right Control"
+        case .leftShift:    return "Left Shift"
+        case .rightShift:   return "Right Shift"
+        }
+    }
+
+    /// Label shown for a double-tap binding, e.g. "⌥ ⌥  Right Option".
+    var displayName: String { "\(symbol) \(symbol)  \(sideName)" }
+
+    /// Label shown for a single-press binding, e.g. "⌥  Right Option". The
+    /// surrounding UI supplies the verb ("Hold …" / "Press …") based on the
+    /// activation mode, so this stays verb-free.
+    var singleDisplayName: String { "\(symbol)  \(sideName)" }
 }
 
 // MARK: - Shortcut
 
 enum Shortcut: Equatable {
     case combo(keyCode: CGKeyCode, modifiers: CGEventFlags)
-    case doubleTap(DoubleTapModifier)
+    case doubleTap(ModifierKey)
+    /// A single modifier key (e.g. Right Option) as the trigger: held for the
+    /// duration of dictation in hold-to-talk mode, or pressed to flip recording
+    /// on/off in toggle mode.
+    case modifier(ModifierKey)
 
     /// Convenience initialiser matching the old struct API.
     /// Handles the fn-key modifier promotion automatically.
@@ -80,6 +103,8 @@ enum Shortcut: Equatable {
             return pieces.joined(separator: " ")
         case .doubleTap(let modifier):
             return modifier.displayName
+        case .modifier(let modifier):
+            return modifier.singleDisplayName
         }
     }
 
@@ -88,6 +113,7 @@ enum Shortcut: Equatable {
         switch self {
         case .combo(let keyCode, _): return keyCodeToString(keyCode)?.lowercased() ?? ""
         case .doubleTap:             return ""
+        case .modifier:              return ""
         }
     }
 
@@ -103,6 +129,8 @@ enum Shortcut: Equatable {
             return mask
         case .doubleTap:
             return []
+        case .modifier:
+            return []
         }
     }
 
@@ -112,13 +140,20 @@ enum Shortcut: Equatable {
             return "\(keyCode):\(modifiers.rawValue)"
         case .doubleTap(let modifier):
             return "doubletap:\(modifier.rawValue)"
+        case .modifier(let modifier):
+            return "mod:\(modifier.rawValue)"
         }
     }
 
     static func deserialize(_ value: String) -> Shortcut? {
         if value.hasPrefix("doubletap:") {
             let raw = String(value.dropFirst("doubletap:".count))
-            return DoubleTapModifier(rawValue: raw).map { .doubleTap($0) }
+            return ModifierKey(rawValue: raw).map { .doubleTap($0) }
+        }
+        // "mod:" is the current single-modifier prefix; "hold:" is the earlier name.
+        for prefix in ["mod:", "hold:"] where value.hasPrefix(prefix) {
+            let raw = String(value.dropFirst(prefix.count))
+            return ModifierKey(rawValue: raw).map { .modifier($0) }
         }
         let parts = value.split(separator: ":")
         guard parts.count == 2,
@@ -311,7 +346,7 @@ final class GlobalShortcutMonitor {
 final class DoubleTapMonitor {
     enum Event { case keyDown, keyUp }
 
-    private let modifier: DoubleTapModifier
+    private let modifier: ModifierKey
     private let handler: (Event) -> Void
     private let doubleTapWindow: TimeInterval = 0.4
 
@@ -324,7 +359,7 @@ final class DoubleTapMonitor {
     private var isModifierDown = false
     private var isActivated = false
 
-    init(modifier: DoubleTapModifier, handler: @escaping (Event) -> Void) {
+    init(modifier: ModifierKey, handler: @escaping (Event) -> Void) {
         self.modifier = modifier
         self.handler  = handler
     }
@@ -411,6 +446,101 @@ final class DoubleTapMonitor {
         }
 
         return nil  // Swallow all flagsChanged events for this key
+    }
+}
+
+// MARK: - ModifierKeyMonitor
+
+/// Fires keyDown when a single modifier key (e.g. right Option) is pressed and
+/// keyUp when it is released, so a bare modifier can drive dictation — held to
+/// talk in hold-to-talk mode, or pressed to flip recording on/off in toggle
+/// mode. A bare modifier only emits `flagsChanged` events (never a keyDown with
+/// a keycode), which is why GlobalShortcutMonitor can't see it — this watches
+/// those flag transitions for one specific left/right key.
+///
+/// Events are passed through unchanged so the modifier keeps working normally
+/// for the rest of the system (typing, other shortcuts); a lone modifier press
+/// reaching the focused app is harmless.
+final class ModifierKeyMonitor {
+    enum Event { case keyDown, keyUp }
+
+    private let modifier: ModifierKey
+    private let handler: (Event) -> Void
+
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var monitorQueue: DispatchQueue?
+
+    // State — accessed only from monitorQueue's run loop
+    private var isDown = false
+
+    init(modifier: ModifierKey, handler: @escaping (Event) -> Void) {
+        self.modifier = modifier
+        self.handler  = handler
+    }
+
+    func start() {
+        guard eventTap == nil else { return }
+
+        let mask = 1 << CGEventType.flagsChanged.rawValue
+        let callback: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo else { return Unmanaged.passUnretained(event) }
+            let monitor = Unmanaged<ModifierKeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+            monitor.handle(event: event, type: type)
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(mask),
+            callback: callback,
+            userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        ) else {
+            vxLog("[holdmod/start] Failed to create CGEventTap")
+            return
+        }
+
+        eventTap = tap
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+
+        monitorQueue = DispatchQueue(label: "voice.vx.holdmodifier", qos: .userInteractive)
+        monitorQueue?.async { [weak self] in
+            guard let self, let source = self.runLoopSource else { return }
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            CFRunLoopRun()
+        }
+    }
+
+    func stop() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+        }
+        runLoopSource = nil
+        eventTap = nil
+        monitorQueue = nil
+        isDown = false
+    }
+
+    private func handle(event: CGEvent, type: CGEventType) {
+        guard type == .flagsChanged else { return }
+
+        let eventKeyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        guard eventKeyCode == modifier.keyCode else { return }
+
+        let pressed = event.flags.contains(modifier.modifierFlag)
+        if pressed && !isDown {
+            isDown = true
+            handler(.keyDown)
+        } else if !pressed && isDown {
+            isDown = false
+            handler(.keyUp)
+        }
     }
 }
 

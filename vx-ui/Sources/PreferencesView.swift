@@ -184,6 +184,14 @@ struct PreferencesView: View {
                     .labelsHidden()
                     .pickerStyle(.segmented)
                 }
+                .alert("Shortcut reset", isPresented: Binding(
+                    get: { appState.shortcutNotice != nil },
+                    set: { if !$0 { appState.shortcutNotice = nil } }
+                ), presenting: appState.shortcutNotice) { _ in
+                    Button("OK", role: .cancel) { appState.shortcutNotice = nil }
+                } message: { notice in
+                    Text(notice)
+                }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Shortcut")
@@ -196,6 +204,12 @@ struct PreferencesView: View {
                         }
                     }
                     Text(appState.activationMode == .holdToTalk ? "Hold the keys to dictate." : "Press once to start, press again to stop.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(appState.activationMode == .holdToTalk
+                         ? "Use a single modifier or a key combo (e.g. ⌘Z). Right Option stays out of the way of typing."
+                         : "Use a single modifier, a double-tap of one, or a key combo. Right Option stays out of the way of typing.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1328,7 +1342,7 @@ struct PreferencesView: View {
 
         NotificationCenter.default.post(name: .vxPauseShortcut, object: nil)
 
-        let monitor = ShortcutCaptureMonitor { shortcut in
+        let monitor = ShortcutCaptureMonitor(activationMode: appState.activationMode) { shortcut in
             DispatchQueue.main.async {
                 self.appState.shortcut = shortcut
                 alert.window.sheetParent?.endSheet(alert.window)
@@ -1684,6 +1698,10 @@ private let kTypeWildCard: AEEventClass = 0x2A2A2A2A
 
 private final class ShortcutCaptureMonitor {
     private let handler: (Shortcut) -> Void
+    /// Determines what a lone modifier becomes: a hold-to-talk binding when the
+    /// user is in hold-to-talk mode, or a double-tap binding in toggle mode
+    /// (a single bare-modifier press would toggle far too easily).
+    private let activationMode: ActivationMode
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var pendingShortcut: Shortcut?
@@ -1702,7 +1720,8 @@ private final class ShortcutCaptureMonitor {
     private var doubleTapTimer: DispatchWorkItem? = nil
     private let doubleTapWindow: TimeInterval = 0.4
 
-    init(handler: @escaping (Shortcut) -> Void) {
+    init(activationMode: ActivationMode = .holdToTalk, handler: @escaping (Shortcut) -> Void) {
+        self.activationMode = activationMode
         self.handler = handler
     }
 
@@ -1773,7 +1792,7 @@ private final class ShortcutCaptureMonitor {
                 if let releasedAt = firstTapReleasedAt,
                    firstTapKeyCode == keyCode,
                    Date().timeIntervalSince(releasedAt) < doubleTapWindow,
-                   let dtModifier = doubleTapModifier(for: keyCode) {
+                   let dtModifier = modifierKey(for: keyCode) {
                     cancelDoubleTapTracking()
                     pendingShortcut = nil
                     emit(.doubleTap(dtModifier))
@@ -1783,25 +1802,33 @@ private final class ShortcutCaptureMonitor {
                 cancelDoubleTapTracking()
                 pendingShortcut = Shortcut(keyCode: keyCode, modifiers: modifiers)
             } else if case .combo(let pk, _) = pendingShortcut, pk == keyCode {
-                // Modifier released — if it's a modifier-only key, start double-tap window
-                if doubleTapModifier(for: keyCode) != nil {
-                    let saved = pendingShortcut!
-                    let savedKeyCode = keyCode
-                    pendingShortcut = nil
-                    firstTapReleasedAt = Date()
-                    firstTapKeyCode = savedKeyCode
-                    firstTapShortcut = saved
-                    // If no second tap arrives, emit the single-modifier shortcut
-                    let work = DispatchWorkItem { [weak self] in
-                        guard let self, self.firstTapKeyCode == savedKeyCode else { return }
-                        let s = self.firstTapShortcut
-                        self.firstTapReleasedAt = nil
-                        self.firstTapKeyCode = nil
-                        self.firstTapShortcut = nil
-                        if let s { self.emit(s) }
+                if let modKey = modifierKey(for: keyCode) {
+                    // A bare modifier was pressed and released.
+                    if activationMode == .holdToTalk {
+                        // Hold-to-talk binds the single modifier (hold it to dictate).
+                        // There is no double-tap in hold-to-talk, so commit immediately.
+                        pendingShortcut = nil
+                        emit(.modifier(modKey))
+                    } else {
+                        // Toggle accepts either a single press or a double-tap of the same
+                        // modifier. Wait one window to see if a second tap arrives; if not,
+                        // commit the single-modifier binding.
+                        let savedKeyCode = keyCode
+                        pendingShortcut = nil
+                        firstTapReleasedAt = Date()
+                        firstTapKeyCode = savedKeyCode
+                        firstTapShortcut = .modifier(modKey)
+                        let work = DispatchWorkItem { [weak self] in
+                            guard let self, self.firstTapKeyCode == savedKeyCode else { return }
+                            let s = self.firstTapShortcut
+                            self.firstTapReleasedAt = nil
+                            self.firstTapKeyCode = nil
+                            self.firstTapShortcut = nil
+                            if let s { self.emit(s) }
+                        }
+                        doubleTapTimer = work
+                        DispatchQueue.main.asyncAfter(deadline: .now() + doubleTapWindow, execute: work)
                     }
-                    doubleTapTimer = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + doubleTapWindow, execute: work)
                 } else {
                     // Non-modifier-only key (e.g. fn alone) — emit immediately
                     let shortcut = pendingShortcut!
@@ -1838,7 +1865,7 @@ private final class ShortcutCaptureMonitor {
         }
     }
 
-    private func doubleTapModifier(for keyCode: CGKeyCode) -> DoubleTapModifier? {
+    private func modifierKey(for keyCode: CGKeyCode) -> ModifierKey? {
         switch Int(keyCode) {
         case kVK_Option:       return .leftOption
         case kVK_RightOption:  return .rightOption

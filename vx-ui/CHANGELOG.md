@@ -2,7 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v1.0.37] - 2026-06-05
+## [v1.0.38] - 2026-06-05
+
+### Added
+- You can now bind a single modifier key (e.g. Right Option) as the shortcut. In hold-to-talk mode you hold it to dictate; in toggle mode you press it to start and stop. A held modifier emits no key code, so it previously did nothing when bound — now it works. The key is passed through, so it keeps functioning normally elsewhere (Right Option is a good pick since it stays out of the way of typing).
+
+### Changed
+- Shortcut labels are clearer and match the activation mode: a single modifier shows as e.g. `⌥ Right Option` and a double-tap as `⌥ ⌥ Right Option`, with the surrounding text supplying "Hold…" or "Press…" so it always reads correctly.
+- Double-tap shortcuts are now correctly treated as toggle-only. Switching to hold-to-talk while a double-tap shortcut is set clears it (reverting to the default) and explains why, since you can't hold a double-tap.
+
+### Fixed
+- Recording the shortcut no longer produces a dead modifier-only binding that silently did nothing.
 
 ### Fixed
 - Dictation now works when an external microphone is used while audio output is routed to Bluetooth headphones (e.g. a Blue Yeti while listening on WH-1000XM3). Previously the audio engine failed to start with a "The operation couldn't be completed" error because macOS can't run split input/output through the same audio unit. vx now captures from the chosen input device independently of the output device.
