@@ -2,7 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v1.0.38] - 2026-06-05
+## [v1.0.39] - 2026-06-05
+
+### Fixed
+- Function keys (F1–F20) now work as shortcuts. On Macs where the top row defaults to media keys, F1 only emits its key code while fn is held, so the binding picked up the fn flag and showed up as just "fn". Function-key bindings now display correctly (e.g. `F1`) and trigger whether or not fn is held, regardless of the "Use F1, F2, etc. as standard function keys" setting.
 
 ### Added
 - You can now bind a single modifier key (e.g. Right Option) as the shortcut. In hold-to-talk mode you hold it to dictate; in toggle mode you press it to start and stop. A held modifier emits no key code, so it previously did nothing when bound — now it works. The key is passed through, so it keeps functioning normally elsewhere (Right Option is a good pick since it stays out of the way of typing).

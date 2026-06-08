@@ -85,6 +85,12 @@ enum Shortcut: Equatable {
     init(keyCode: CGKeyCode, modifiers: CGEventFlags) {
         if keyCode == CGKeyCode(kVK_Function) {
             self = .combo(keyCode: keyCode, modifiers: modifiers.union(.maskSecondaryFn))
+        } else if Shortcut.isFunctionKey(keyCode) {
+            // On Macs where the function row defaults to media keys, F1…F20 only emit
+            // their key code while fn is held, so the captured flags carry fn. That's an
+            // artifact of the keyboard setting, not a chosen modifier — drop it so the
+            // binding reads as just "F1" and matches with or without fn held.
+            self = .combo(keyCode: keyCode, modifiers: modifiers.subtracting(.maskSecondaryFn))
         } else {
             self = .combo(keyCode: keyCode, modifiers: modifiers)
         }
@@ -173,6 +179,7 @@ enum Shortcut: Equatable {
     }
 
     private static func stringForKeyCode(_ keyCode: CGKeyCode) -> String {
+        if let name = functionKeyNames[Int(keyCode)] { return name }
         switch Int(keyCode) {
         case kVK_Space:    return "Space"
         case kVK_Return:   return "Return"
@@ -183,6 +190,22 @@ enum Shortcut: Equatable {
             if let string = keyCodeToString(keyCode) { return string.uppercased() }
             return "#\(keyCode)"
         }
+    }
+
+    /// Maps function-row key codes to their labels (F1…F20). Their "display"
+    /// character is empty via UCKeyTranslate, so they need explicit names.
+    static let functionKeyNames: [Int: String] = [
+        kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4", kVK_F5: "F5",
+        kVK_F6: "F6", kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9", kVK_F10: "F10",
+        kVK_F11: "F11", kVK_F12: "F12", kVK_F13: "F13", kVK_F14: "F14", kVK_F15: "F15",
+        kVK_F16: "F16", kVK_F17: "F17", kVK_F18: "F18", kVK_F19: "F19", kVK_F20: "F20",
+    ]
+
+    /// True for the F1…F20 function-row keys. The fn/Globe flag on these is an
+    /// artifact of the keyboard's function-row setting, not an intentional
+    /// modifier, so it is ignored when binding and matching them.
+    static func isFunctionKey(_ keyCode: CGKeyCode) -> Bool {
+        functionKeyNames[Int(keyCode)] != nil
     }
 }
 
@@ -273,7 +296,10 @@ final class GlobalShortcutMonitor {
 
         guard type == .keyDown || type == .keyUp else { return true }
 
-        let relevantFlags: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]
+        // For function keys, ignore the fn/Globe flag entirely: whether F1 carries it
+        // depends on the keyboard's function-row setting, so the binding must match both.
+        var relevantFlags: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]
+        if Shortcut.isFunctionKey(keyCode) { relevantFlags.remove(.maskSecondaryFn) }
         let flags = event.flags.intersection(relevantFlags)
         let eventKeyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
 
