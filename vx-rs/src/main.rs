@@ -347,6 +347,16 @@ fn is_silence_hallucination(text: &str) -> bool {
         return true;
     }
 
+    // The initial Whisper prompt improves punctuation, but on muted/near-silent
+    // audio Whisper can echo pieces of that prompt as if they were speech.
+    if lower.contains("transcribe clearly written english")
+        || lower.contains("full punctuation, proper capitalization")
+        || lower.contains("if the speaker lists multiple items")
+        || lower.contains("separate them with commas or the word")
+    {
+        return true;
+    }
+
     // Substring matches — catch longer variants like "So we'll see you in the next video, bye!"
     // These phrases are distinctive enough that false-positives in genuine dictation are unlikely.
     lower.contains("see you in the next video")
@@ -565,6 +575,7 @@ mod tests {
             "So we'll see you in the next video, bye!",
             "Don't forget to subscribe",
             "Like and subscribe!",
+            "If the speaker lists multiple items, separate them with commas or the word and line breaks, separate them with commas or the word.",
         ];
         for phrase in &phrases {
             assert!(
@@ -597,6 +608,7 @@ mod tests {
             "Let me open the terminal.",
             "The meeting is at 3pm.",
             "I want to say thank you to everyone on the team.",
+            "Separate the names with commas when you write it down.",
         ];
         for phrase in &phrases {
             assert!(
