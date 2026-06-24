@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.40] - 2026-06-05
+
+### Fixed
+- vx no longer inserts stray text when you trigger dictation on silence or a muted mic. Whisper could echo pieces of vx's internal punctuation prompt as if they were spoken; those echoes are now filtered out.
+
 ## [v1.0.39] - 2026-06-05
 
 ### Fixed
