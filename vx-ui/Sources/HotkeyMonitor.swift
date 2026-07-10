@@ -97,6 +97,7 @@ enum Shortcut: Equatable {
     }
 
     static let optionSpace   = Shortcut.combo(keyCode: CGKeyCode(kVK_Space),  modifiers: [.maskAlternate])
+    static let controlOptionSpace = Shortcut.combo(keyCode: CGKeyCode(kVK_Space), modifiers: [.maskControl, .maskAlternate])
     static let commandShiftC = Shortcut.combo(keyCode: CGKeyCode(kVK_ANSI_C), modifiers: [.maskCommand, .maskShift])
 
     var displayName: String {

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.41] - 2026-07-10
+
+### Added
+- Added Go Mode for continuous dictation sessions. When enabled, vx listens across utterances, inserts each completed phrase, and submits it automatically.
+- Added a configurable Go Mode shortcut and submit delay.
+- Added a Go Mode HUD indication with a gold-edged recording state so it is clear when continuous listening is active.
+- Added configurable spoken submit phrases for normal dictation. Say a configured command like "submit" by itself to press Return, or end a dictation with it to insert the preceding text and submit.
+
+### Fixed
+- Submitting from Go Mode now works reliably in terminal apps such as Ghostty, iTerm, and terminal-based coding agents.
+- Spoken submit commands are detected before AI post-processing, so cleanup can no longer rewrite or remove the submit command before vx acts on it.
+- Repeated trailing submit words behave correctly: in "it should actually submit submit", only the final "submit" is treated as the command.
+- The dictation HUD keeps its recording badge, side buttons, and drag behavior while Go Mode is active.
+
 ## [v1.0.40] - 2026-06-05
 
 ### Fixed

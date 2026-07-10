@@ -100,12 +100,21 @@ final class AudioCapture {
     ///   - session: When non-nil, 16 kHz mono f32 frames are pushed to the transcription
     ///     session via `write(samples:)` instead of being written to a WAV file. The returned
     ///     URL is a sentinel temp path that is never written to disk; streaming callers ignore it.
+    ///   - sampleSink: Optional lower-level streaming sink. Used by Go mode to segment
+    ///     continuous microphone audio into utterances while keeping capture alive.
     @discardableResult
-    func startRecording(deviceUID: String? = nil, session: TranscriptionSession? = nil) throws -> URL {
+    func startRecording(
+        deviceUID: String? = nil,
+        session: TranscriptionSession? = nil,
+        sampleSink: (([Float]) -> Void)? = nil
+    ) throws -> URL {
         try AudioCapture.ensurePermission()
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("vx-dictation-\(UUID().uuidString).wav")
+        let streamingSink: (([Float]) -> Void)? = sampleSink ?? session.map { transcriptionSession in
+            { samples in transcriptionSession.write(samples: samples) }
+        }
 
         // For an explicitly-selected input device, capture via AVCaptureSession instead of
         // AVAudioEngine. AVAudioEngine's IO unit couples the input to the output device, so
@@ -113,8 +122,8 @@ final class AudioCapture {
         // with kAudioUnitErr_FormatNotSupported (-10868). AVCaptureSession records from a
         // chosen device independent of the output, sidestepping that entirely. The system-
         // default path (no device chosen) keeps using AVAudioEngine.
-        if let session, let uid = deviceUID, let device = AVCaptureDevice(uniqueID: uid) {
-            return try startCaptureSession(device: device, sink: session, url: url)
+        if let streamingSink, let uid = deviceUID, let device = AVCaptureDevice(uniqueID: uid) {
+            return try startCaptureSession(device: device, sink: streamingSink, url: url)
         }
 
         let engine = AVAudioEngine()
@@ -153,7 +162,7 @@ final class AudioCapture {
         let inputNode = engine.inputNode
         let subject = levelSubject
 
-        if let session {
+        if let streamingSink {
             // Streaming mode: convert to f32 16 kHz mono and push frames to the session.
             let f32Format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                          sampleRate: 16_000,
@@ -187,7 +196,7 @@ final class AudioCapture {
                 if let floatData = outBuffer.floatChannelData {
                     let frameCount = Int(outBuffer.frameLength)
                     let samples = Array(UnsafeBufferPointer(start: floatData[0], count: frameCount))
-                    session.write(samples: samples)
+                    streamingSink(samples)
                 }
 
                 let power = AudioCapture.averagePower(from: buffer)
@@ -271,7 +280,7 @@ final class AudioCapture {
     /// Streaming capture from an explicitly-chosen device via AVCaptureSession — records from
     /// the device independent of the output device, so it works when a different (e.g.
     /// Bluetooth) device is the system output, unlike the AVAudioEngine input-device override.
-    private func startCaptureSession(device: AVCaptureDevice, sink: TranscriptionSession, url: URL) throws -> URL {
+    private func startCaptureSession(device: AVCaptureDevice, sink: @escaping ([Float]) -> Void, url: URL) throws -> URL {
         let capture = AVCaptureSession()
 
         let input: AVCaptureDeviceInput
@@ -302,8 +311,8 @@ final class AudioCapture {
             vxLog("[audio/capture] Cannot add audio output")
             throw AudioCaptureError.captureUnavailable
         }
-        let delegate = AudioSampleDelegate(level: levelSubject) { [weak sink] samples in
-            sink?.write(samples: samples)
+        let delegate = AudioSampleDelegate(level: levelSubject) { samples in
+            sink(samples)
         }
         output.setSampleBufferDelegate(delegate, queue: DispatchQueue(label: "com.vx.capture.audio"))
         capture.addOutput(output)

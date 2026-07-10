@@ -36,6 +36,7 @@ final class DictationHUDModel: ObservableObject {
     enum VisualStyle: Equatable {
         case idle
         case recording
+        case goMode
         case processing
         case success
         case finishing
@@ -102,7 +103,7 @@ struct DictationHUD: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 28)
         .padding(.horizontal, 24)
-        .padding(.top, (model.state == .listening && model.visualStyle == .recording) ? HUDConfig.glowRadius : 0)
+        .padding(.top, (model.state == .listening && model.visualStyle.usesGlow) ? HUDConfig.glowRadius : 0)
         .onPreferenceChange(CapsuleFrameKey.self) { value in
             model.onCapsuleFrameInScreen?(value.rect)
         }
@@ -151,7 +152,7 @@ struct DictationHUD: View {
                 Group {
                     if model.visualStyle == .processing {
                         ProcessingDots(reduceMotion: reduceMotion)
-                    } else if model.visualStyle == .recording {
+                    } else if model.visualStyle == .recording || model.visualStyle == .goMode {
                         LevelMeter(level: model.level)
                     } else if model.visualStyle == .success {
                         SuccessIndicator()
@@ -187,8 +188,8 @@ struct DictationHUD: View {
             )
             .clipShape(Capsule())
             .shadow(
-                color: model.visualStyle == .recording ? HUDConfig.glowColor.opacity(HUDConfig.glowOpacity) : .clear,
-                radius: model.visualStyle == .recording ? HUDConfig.glowRadius : 0
+                color: model.visualStyle.glowColor.opacity(model.visualStyle.glowOpacity),
+                radius: model.visualStyle.usesGlow ? HUDConfig.glowRadius : 0
             )
             .background(
                 GeometryReader { geo in
@@ -198,11 +199,11 @@ struct DictationHUD: View {
                     )
                 }
             )
-            .padding(model.visualStyle == .recording ? HUDConfig.glowRadius : 0)
+            .padding(model.visualStyle.usesGlow ? HUDConfig.glowRadius : 0)
             .matchedGeometryEffect(id: "hud", in: hudNamespace)
 
-            if model.visualStyle == .recording || model.visualStyle == .processing {
-                Text(model.visualStyle == .recording ? "Recording" : "Transcribing...")
+            if model.visualStyle == .recording || model.visualStyle == .goMode || model.visualStyle == .processing {
+                Text(model.visualStyle.statusText)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(Color.white.opacity(0.75))
                     .padding(.horizontal, 12)
@@ -328,6 +329,7 @@ private extension DictationHUDModel.VisualStyle {
         switch self {
         case .idle: return Color.white
         case .recording: return Color.white
+        case .goMode: return Color.orange
         case .processing: return Color.blue
         case .success: return Color.white
         case .finishing: return Color.white
@@ -341,6 +343,7 @@ private extension DictationHUDModel.VisualStyle {
         switch self {
         case .idle: return 0.05
         case .recording: return 0.1
+        case .goMode: return 0.06
         case .processing: return 0.18
         case .success: return 0.12
         case .finishing: return 0.18
@@ -354,6 +357,7 @@ private extension DictationHUDModel.VisualStyle {
         switch self {
         case .idle: return .clear
         case .recording: return Color.white.opacity(0.22)
+        case .goMode: return Color(red: 1.0, green: 0.64, blue: 0.16).opacity(0.72)
         case .processing: return Color.blue.opacity(0.45)
         case .success: return Color.white.opacity(0.5)
         case .finishing: return Color.white.opacity(0.65)
@@ -367,12 +371,57 @@ private extension DictationHUDModel.VisualStyle {
         switch self {
         case .idle: return 0
         case .recording: return 1
+        case .goMode: return 1.5
         case .processing: return 1.6
         case .success: return 1.2
         case .finishing: return 1.8
         case .cancelled: return 1.4
         case .warning: return 1.3
         case .error: return 1.6
+        }
+    }
+
+    var usesGlow: Bool {
+        switch self {
+        case .recording, .goMode:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var glowColor: Color {
+        switch self {
+        case .goMode:
+            return Color(red: 1.0, green: 0.68, blue: 0.22)
+        case .recording:
+            return HUDConfig.glowColor
+        default:
+            return .clear
+        }
+    }
+
+    var glowOpacity: Double {
+        switch self {
+        case .goMode:
+            return 0.07
+        case .recording:
+            return HUDConfig.glowOpacity
+        default:
+            return 0
+        }
+    }
+
+    var statusText: String {
+        switch self {
+        case .recording:
+            return "Recording"
+        case .goMode:
+            return "Go Mode"
+        case .processing:
+            return "Transcribing..."
+        default:
+            return ""
         }
     }
 }
@@ -391,6 +440,17 @@ private extension DictationHUDModel.VisualStyle {
     let model = DictationHUDModel()
     model.state = .listening
     model.visualStyle = .recording
+    model.level = 0.5
+    model.controlsEnabled = true
+    return DictationHUD(model: model)
+        .frame(width: 360, height: 180)
+        .background(.black.opacity(0.5))
+}
+
+#Preview("Go Mode") {
+    let model = DictationHUDModel()
+    model.state = .listening
+    model.visualStyle = .goMode
     model.level = 0.5
     model.controlsEnabled = true
     return DictationHUD(model: model)
@@ -529,6 +589,10 @@ final class DictationHUDController {
     }
 
     func showListening(onCancel: @escaping () -> Void, onStop: @escaping () -> Void) {
+        showListening(style: .recording, onCancel: onCancel, onStop: onStop)
+    }
+
+    func showListening(style: DictationHUDModel.VisualStyle, onCancel: @escaping () -> Void, onStop: @escaping () -> Void) {
         cancelHint()
         statusWorkItem?.cancel()
         statusWorkItem = nil
@@ -543,7 +607,7 @@ final class DictationHUDController {
                 onStop()
             }
             model.level = 0
-            model.visualStyle = .recording
+            model.visualStyle = style
             model.controlsEnabled = true
             model.state = .listening
         }

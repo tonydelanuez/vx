@@ -43,6 +43,7 @@ final class InMemoryTranscriber: Transcriber {
     let session: InMemoryTranscriptionSession
     var beginError: Error?
     private(set) var lastModel: URL?
+    private(set) var beginCount = 0
 
     init(session: InMemoryTranscriptionSession = InMemoryTranscriptionSession()) {
         self.session = session
@@ -50,6 +51,7 @@ final class InMemoryTranscriber: Transcriber {
 
     func begin(model: URL) throws -> TranscriptionSession {
         lastModel = model
+        beginCount += 1
         if let beginError { throw beginError }
         return session
     }

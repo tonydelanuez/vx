@@ -122,8 +122,40 @@ public final class AppState: ObservableObject {
         didSet { defaults.set(copyLastShortcut.serialize(), forKey: "vx.copy-last-shortcut") }
     }
 
+    @Published var goModeShortcut: Shortcut {
+        didSet { defaults.set(goModeShortcut.serialize(), forKey: "vx.go-mode-shortcut") }
+    }
+
+    @Published var goModeSubmitDelay: Double {
+        didSet {
+            let clamped = Self.clampGoModeSubmitDelay(goModeSubmitDelay)
+            if clamped != goModeSubmitDelay {
+                goModeSubmitDelay = clamped
+                return
+            }
+            defaults.set(goModeSubmitDelay, forKey: "vx.go-mode-submit-delay")
+        }
+    }
+
+    @Published var spokenSubmitPhrasesText: String {
+        didSet { defaults.set(spokenSubmitPhrasesText, forKey: "vx.spoken-submit-phrases") }
+    }
+
+    var spokenSubmitPhrases: [String] {
+        SpokenSubmitCommandDetector.parsePhrases(spokenSubmitPhrasesText)
+    }
+
     @Published var isPostProcessingEnabled: Bool {
-        didSet { defaults.set(isPostProcessingEnabled, forKey: "vx.ai-post-processing-enabled") }
+        didSet {
+            defaults.set(isPostProcessingEnabled, forKey: "vx.ai-post-processing-enabled")
+            if !isPostProcessingEnabled {
+                usePostProcessingInGoMode = false
+            }
+        }
+    }
+
+    @Published var usePostProcessingInGoMode: Bool {
+        didSet { defaults.set(usePostProcessingInGoMode, forKey: "vx.go-mode-ai-post-processing-enabled") }
     }
 
     @Published var postProcessingProvider: PostProcessingProvider {
@@ -189,7 +221,11 @@ public final class AppState: ObservableObject {
         duckAudioWhileRecording = defaults.bool(forKey: "vx.duck-audio")
         duckVolume = defaults.object(forKey: "vx.duck-volume") as? Double ?? 0.2
         copyLastShortcut = defaults.string(forKey: "vx.copy-last-shortcut").flatMap(Shortcut.deserialize) ?? .commandShiftC
+        goModeShortcut = defaults.string(forKey: "vx.go-mode-shortcut").flatMap(Shortcut.deserialize) ?? .controlOptionSpace
+        goModeSubmitDelay = Self.clampGoModeSubmitDelay(defaults.object(forKey: "vx.go-mode-submit-delay") as? Double ?? 0.35)
+        spokenSubmitPhrasesText = defaults.string(forKey: "vx.spoken-submit-phrases") ?? "submit"
         isPostProcessingEnabled = defaults.bool(forKey: "vx.ai-post-processing-enabled")
+        usePostProcessingInGoMode = defaults.bool(forKey: "vx.go-mode-ai-post-processing-enabled")
         let storedProvider = PostProcessingProvider(rawValue: defaults.string(forKey: "vx.ai-post-processing-provider") ?? "") ?? .anthropic
         postProcessingProvider = storedProvider
         postProcessingAPIKey = defaults.string(forKey: "vx.ai-api-key") ?? ""
@@ -204,6 +240,10 @@ public final class AppState: ObservableObject {
         currentCodeProfile = CodeProfile(rawValue: defaults.string(forKey: "vx.code-profile") ?? "") ?? .generic
         selectedModelName = defaults.string(forKey: "vx.selected-model") ?? WhisperModel.defaultModel.id
 
+        if !isPostProcessingEnabled {
+            usePostProcessingInGoMode = false
+        }
+
         // Remove legacy overrides that pointed to build-relative paths.
         defaults.removeObject(forKey: "vx.cli-path")
         defaults.removeObject(forKey: "vx.model-path")
@@ -215,6 +255,10 @@ public final class AppState: ObservableObject {
             shortcut = .optionSpace
             defaults.set(shortcut.serialize(), forKey: shortcutKey)
         }
+    }
+
+    private static func clampGoModeSubmitDelay(_ value: Double) -> Double {
+        min(max(value, 0), 2)
     }
 
     public var backendURL: URL {

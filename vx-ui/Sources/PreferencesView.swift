@@ -57,6 +57,8 @@ struct PreferencesView: View {
     @State private var availableReleases: [GithubRelease] = []
     @State private var isLoadingReleases = false
     @State private var releaseFetchError: String? = nil
+    @State private var isEditingSpokenSubmit = false
+    @State private var spokenSubmitDraft = ""
 
     private let contextOptions: [(value: String, label: String)] = [
         ("general",            "General (no override)"),
@@ -147,6 +149,15 @@ struct PreferencesView: View {
         )
     }
 
+    private var spokenSubmitPhrasesForDisplay: [String] {
+        SpokenSubmitCommandDetector.parsePhrases(appState.spokenSubmitPhrasesText)
+    }
+
+    private var normalizedSpokenSubmitDraft: String {
+        SpokenSubmitCommandDetector.parsePhrases(spokenSubmitDraft)
+            .joined(separator: ", ")
+    }
+
     private var configTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -225,6 +236,75 @@ struct PreferencesView: View {
                         }
                     }
                     Text("Copies your most recent transcription to the clipboard.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Go Mode Shortcut")
+                        .font(.headline)
+                    HStack {
+                        Text(appState.goModeShortcut.displayName)
+                            .frame(width: 140, alignment: .leading)
+                        Button("Change…") {
+                            captureShortcutForGoMode()
+                        }
+                    }
+                    Text("Toggles continuous listening. Each completed utterance is inserted and submitted with Return.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Text("Submit delay")
+                            .foregroundStyle(.secondary)
+                        Slider(value: $appState.goModeSubmitDelay, in: 0...2, step: 0.05)
+                        Text(String(format: "%.2fs", appState.goModeSubmitDelay))
+                            .frame(width: 56, alignment: .trailing)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Spoken Submit")
+                        .font(.headline)
+                    if isEditingSpokenSubmit {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("submit", text: $spokenSubmitDraft)
+                                .textFieldStyle(.roundedBorder)
+                            HStack(spacing: 8) {
+                                Button("Save") {
+                                    appState.spokenSubmitPhrasesText = normalizedSpokenSubmitDraft
+                                    isEditingSpokenSubmit = false
+                                }
+                                Button("Cancel") {
+                                    spokenSubmitDraft = appState.spokenSubmitPhrasesText
+                                    isEditingSpokenSubmit = false
+                                }
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            if spokenSubmitPhrasesForDisplay.isEmpty {
+                                Text("None")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(spokenSubmitPhrasesForDisplay, id: \.self) { phrase in
+                                    Text(phrase)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color(nsColor: .controlBackgroundColor))
+                                        .clipShape(Capsule())
+                                }
+                            }
+                            Spacer()
+                            Button("Edit…") {
+                                spokenSubmitDraft = appState.spokenSubmitPhrasesText
+                                isEditingSpokenSubmit = true
+                            }
+                        }
+                    }
+                    Text("Comma-separated phrases that submit during normal dictation. Say one alone to press Return, or at the end to insert the preceding text and submit.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -823,6 +903,13 @@ struct PreferencesView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
+                    Toggle("Use post-processing in Go mode", isOn: $appState.usePostProcessingInGoMode)
+                        .disabled(!appState.isPostProcessingEnabled)
+                    Text("When off, Go mode skips AI cleanup for lower latency and more predictable terminal submissions.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Provider", selection: $appState.postProcessingProvider) {
                             ForEach(PostProcessingProvider.allCases) { provider in
@@ -1370,6 +1457,31 @@ struct PreferencesView: View {
         let monitor = ShortcutCaptureMonitor { shortcut in
             DispatchQueue.main.async {
                 self.appState.copyLastShortcut = shortcut
+                alert.window.sheetParent?.endSheet(alert.window)
+            }
+        }
+        monitor.start()
+
+        alert.beginSheetModal(for: window) { _ in
+            monitor.stop()
+            NotificationCenter.default.post(name: .vxResumeShortcut, object: nil)
+        }
+    }
+
+    private func captureShortcutForGoMode() {
+        guard let window = NSApp.mainWindow else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Press the new shortcut"
+        alert.informativeText = "Press a key combination to set the Go mode shortcut."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Cancel")
+
+        NotificationCenter.default.post(name: .vxPauseShortcut, object: nil)
+
+        let monitor = ShortcutCaptureMonitor(activationMode: .toggle) { shortcut in
+            DispatchQueue.main.async {
+                self.appState.goModeShortcut = shortcut
                 alert.window.sheetParent?.endSheet(alert.window)
             }
         }

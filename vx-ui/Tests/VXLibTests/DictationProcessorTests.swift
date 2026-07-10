@@ -99,6 +99,20 @@ final class DictationProcessorTests: XCTestCase {
         XCTAssertEqual(fake.received, "{", "post-processor should get rule output, not 'open brace'")
     }
 
+    func testSpokenSubmitIsRemovedBeforePostProcessing() async {
+        let command = SpokenSubmitCommandDetector.detect(in: "Build this thing submit", phrases: ["submit"])
+        XCTAssertTrue(command.shouldSubmit)
+
+        let fake = InMemoryPostProcessor(result: "Build this thing.")
+        let processor = DictationProcessor(store: makeStore(rules: []), postProcessor: fake)
+        guard case .text(let output, _) = await processor.process(command.textToInsert, session: sessionWithPostProcessing()) else {
+            return XCTFail("expected .text")
+        }
+
+        XCTAssertEqual(fake.received, "Build this thing")
+        XCTAssertEqual(output, "Build this thing.")
+    }
+
     func testPostProcessedTextIsReturned() async {
         let fake = InMemoryPostProcessor(result: "CLEANED")
         let processor = DictationProcessor(store: makeStore(rules: []), postProcessor: fake)

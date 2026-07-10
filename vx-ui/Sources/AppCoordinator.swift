@@ -41,10 +41,20 @@ public final class AppCoordinator: NSObject {
     private var doubleTapMonitor: DoubleTapMonitor?
     private var modifierMonitor: ModifierKeyMonitor?
     private var copyLastMonitor: GlobalShortcutMonitor?
+    private var goModeShortcutMonitor: GlobalShortcutMonitor?
+    private var goModeDoubleTapMonitor: DoubleTapMonitor?
+    private var goModeModifierMonitor: ModifierKeyMonitor?
     private var transcriptionTask: Task<Void, Never>?
+    private var goModeProcessingTasks: [UUID: Task<Void, Never>] = [:]
     private var currentRecordingURL: URL?
     private var activeStream: TranscriptionSession?
+    private var goModeSegmenter: GoModeSegmenter?
+    private var goModeCaptureURL: URL?
+    private var goModeTargetBundleID: String?
+    private var goModeTargetAppName: String?
+    private var goModeTargetPID: pid_t = 0
     private var isRecording = false
+    private var isGoModeActive = false
     private var cancellables = Set<AnyCancellable>()
     private var accessibilityAlertShown = false
     private var escapeGlobalMonitor: Any?
@@ -73,6 +83,7 @@ public final class AppCoordinator: NSObject {
         setupStatusItem()
         setupShortcut()
         setupCopyLastShortcut()
+        setupGoModeShortcut()
         observeAppState()
         hud.updateHint(idleMessage)
         hud.isDebugMode = appState.isDebugMode
@@ -116,7 +127,12 @@ public final class AppCoordinator: NSObject {
         doubleTapMonitor?.stop()
         modifierMonitor?.stop()
         copyLastMonitor?.stop()
+        goModeShortcutMonitor?.stop()
+        goModeDoubleTapMonitor?.stop()
+        goModeModifierMonitor?.stop()
         transcriptionTask?.cancel()
+        for task in goModeProcessingTasks.values { task.cancel() }
+        goModeSegmenter?.stop(finishActive: false)
         FnKeyTap.shared.deactivate()
     }
 
@@ -145,6 +161,12 @@ public final class AppCoordinator: NSObject {
                 self?.modifierMonitor = nil
                 self?.copyLastMonitor?.stop()
                 self?.copyLastMonitor = nil
+                self?.goModeShortcutMonitor?.stop()
+                self?.goModeShortcutMonitor = nil
+                self?.goModeDoubleTapMonitor?.stop()
+                self?.goModeDoubleTapMonitor = nil
+                self?.goModeModifierMonitor?.stop()
+                self?.goModeModifierMonitor = nil
             }
             .store(in: &cancellables)
 
@@ -156,6 +178,7 @@ public final class AppCoordinator: NSObject {
                 self?.copyLastMonitor?.stop()
                 self?.copyLastMonitor = nil
                 self?.setupCopyLastShortcut()
+                self?.restartGoModeShortcutMonitor()
             }
             .store(in: &cancellables)
 
@@ -175,6 +198,21 @@ public final class AppCoordinator: NSObject {
                 }
                 monitor.start()
                 self.copyLastMonitor = monitor
+            }
+            .store(in: &cancellables)
+
+        appState.$goModeShortcut
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.restartGoModeShortcutMonitor()
+            }
+            .store(in: &cancellables)
+
+        appState.$isPostProcessingEnabled
+            .dropFirst()
+            .sink { [weak self] enabled in
+                guard let self, !enabled else { return }
+                self.appState.usePostProcessingInGoMode = false
             }
             .store(in: &cancellables)
 
@@ -270,6 +308,48 @@ public final class AppCoordinator: NSObject {
         }
         monitor.start()
         copyLastMonitor = monitor
+    }
+
+    private func restartGoModeShortcutMonitor() {
+        goModeShortcutMonitor?.stop()
+        goModeShortcutMonitor = nil
+        goModeDoubleTapMonitor?.stop()
+        goModeDoubleTapMonitor = nil
+        goModeModifierMonitor?.stop()
+        goModeModifierMonitor = nil
+        setupGoModeShortcut()
+    }
+
+    private func setupGoModeShortcut() {
+        guard goModeShortcutMonitor == nil,
+              goModeDoubleTapMonitor == nil,
+              goModeModifierMonitor == nil else { return }
+
+        switch appState.goModeShortcut {
+        case .combo(let keyCode, let modifiers):
+            let monitor = GlobalShortcutMonitor(keyCode: keyCode, modifiers: modifiers) { [weak self] event in
+                guard event == .keyDown else { return }
+                DispatchQueue.main.async { self?.toggleGoMode() }
+            }
+            monitor.start()
+            goModeShortcutMonitor = monitor
+
+        case .doubleTap(let modifier):
+            let monitor = DoubleTapMonitor(modifier: modifier) { [weak self] event in
+                guard event == .keyDown else { return }
+                DispatchQueue.main.async { self?.toggleGoMode() }
+            }
+            monitor.start()
+            goModeDoubleTapMonitor = monitor
+
+        case .modifier(let modifier):
+            let monitor = ModifierKeyMonitor(modifier: modifier) { [weak self] event in
+                guard event == .keyDown else { return }
+                DispatchQueue.main.async { self?.toggleGoMode() }
+            }
+            monitor.start()
+            goModeModifierMonitor = monitor
+        }
     }
 
     private func setupStatusItem() {
@@ -473,6 +553,27 @@ public final class AppCoordinator: NSObject {
         hud.showHint("Copied to clipboard", after: 0.0, duration: 1.5)
     }
 
+    private func makePostProcessingConfig(ruleContext: RuleContext, enabled: Bool) -> PostProcessingConfig? {
+        guard enabled,
+              appState.isPostProcessingEnabled,
+              !appState.postProcessingAPIKey.isEmpty else { return nil }
+        let perContextPrompt = ContextPromptStore.load(contextID: ruleContext.mode.promptID)
+        let combinedCustomPrompt = [perContextPrompt, appState.postProcessingCustomPrompt]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        return PostProcessingConfig(
+            provider: appState.postProcessingProvider,
+            model: appState.postProcessingModel,
+            apiKey: appState.postProcessingAPIKey,
+            customBaseURL: appState.postProcessingCustomBaseURL,
+            customPrompt: combinedCustomPrompt,
+            customDictionary: appState.customDictionary,
+            contextHint: ruleContext.mode.postProcessingHint,
+            smoothDisfluencies: appState.smoothDisfluencies
+        )
+    }
+
     @objc private func toggleAutoDetectMode() {
         appState.autoDetectMode.toggle()
     }
@@ -499,6 +600,9 @@ public final class AppCoordinator: NSObject {
 
     private func beginRecording() {
         guard !isRecording else { return }
+        if isGoModeActive {
+            stopGoMode(finishActive: false)
+        }
 
         // Capture the frontmost app before the HUD shows. The HUD is a
         // non-activating panel so focus stays on the target app, but we store
@@ -670,30 +774,19 @@ public final class AppCoordinator: NSObject {
                 )
                 let detectedContext = resolved.detectedContext
                 let ruleContext = resolved.ruleContext
+                let submitTargetContext = self.recordingTargetBundleID.map {
+                    AppContextDetector.detect(bundleID: $0, pid: self.recordingTargetPID)
+                }
                 if let ctx = detectedContext {
                     vxLog("[coordinator/finishRecording] Auto-detected context: \(ctx.displayName) for \(self.recordingTargetBundleID ?? "unknown")")
                 }
-                // Assemble the optional post-processing config from AppState. The per-context
-                // prompt comes first so the global custom prompt can override it on conflict.
-                let postProcessing: PostProcessingConfig? = {
-                    guard self.appState.isPostProcessingEnabled,
-                          !self.appState.postProcessingAPIKey.isEmpty else { return nil }
-                    let perContextPrompt = ContextPromptStore.load(contextID: ruleContext.mode.promptID)
-                    let combinedCustomPrompt = [perContextPrompt, self.appState.postProcessingCustomPrompt]
-                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }
-                        .joined(separator: "\n\n")
-                    return PostProcessingConfig(
-                        provider: self.appState.postProcessingProvider,
-                        model: self.appState.postProcessingModel,
-                        apiKey: self.appState.postProcessingAPIKey,
-                        customBaseURL: self.appState.postProcessingCustomBaseURL,
-                        customPrompt: combinedCustomPrompt,
-                        customDictionary: self.appState.customDictionary,
-                        contextHint: ruleContext.mode.postProcessingHint,
-                        smoothDisfluencies: self.appState.smoothDisfluencies
-                    )
-                }()
+                // Assemble the optional post-processing config from AppState.
+                let postProcessing = self.makePostProcessingConfig(ruleContext: ruleContext, enabled: true)
+                let spokenSubmitCommand = SpokenSubmitCommandDetector.detect(
+                    in: text,
+                    phrases: self.appState.spokenSubmitPhrases
+                )
+                let textForProcessing = spokenSubmitCommand.shouldSubmit ? spokenSubmitCommand.textToInsert : text
 
                 // Sanitize → rules → (optional) post-process, all behind one interface.
                 // .noSpeech means nothing real survived sanitization or post-processing.
@@ -702,32 +795,63 @@ public final class AppCoordinator: NSObject {
                     codeProfile: ruleContext.codeProfile,
                     postProcessing: postProcessing
                 )
-                guard case .text(let finalText, let pipelineResult) = await self.dictationProcessor.process(text, session: session) else {
-                    vxLog("[coordinator/finishRecording] No speech after processing, raw: \(text.debugDescription)")
-                    await MainActor.run {
-                        self.removeEscapeMonitor()
-                        self.logFailure("No speech detected.", dismissAfter: 2.0)
+                let processingOutcome: DictationOutcome
+                if spokenSubmitCommand.shouldSubmit, textForProcessing.isEmpty {
+                    processingOutcome = .noSpeech
+                } else {
+                    processingOutcome = await self.dictationProcessor.process(textForProcessing, session: session)
+                }
+
+                let finalText: String
+                let pipelineResult: TransformationResult?
+                switch processingOutcome {
+                case .text(let output, let result):
+                    finalText = output
+                    pipelineResult = result
+                case .noSpeech:
+                    guard spokenSubmitCommand.shouldSubmit else {
+                        vxLog("[coordinator/finishRecording] No speech after processing, raw: \(text.debugDescription)")
+                        await MainActor.run {
+                            self.removeEscapeMonitor()
+                            self.logFailure("No speech detected.", dismissAfter: 2.0)
+                        }
+                        return
                     }
-                    return
+                    finalText = ""
+                    pipelineResult = nil
                 }
                 guard !Task.isCancelled else { return }
                 let profileSuffix = ruleContext.mode == .code ? "/\(ruleContext.codeProfile.rawValue)" : ""
-                vxLog("[coordinator/finishRecording] Mode: \(ruleContext.mode.rawValue)\(profileSuffix), rules loaded: \(pipelineResult.ruleCount), transformed: \(pipelineResult.didTransform)")
+                vxLog("[coordinator/finishRecording] Mode: \(ruleContext.mode.rawValue)\(profileSuffix), rules loaded: \(pipelineResult?.ruleCount ?? 0), transformed: \(pipelineResult?.didTransform ?? false)")
                 await MainActor.run {
                     self.contextDebugController.model.updateLastRecording(
                         bundleID: self.recordingTargetBundleID,
                         appName: self.recordingTargetAppName,
                         context: detectedContext,
                         mode: ruleContext.mode,
-                        ruleCount: pipelineResult.ruleCount
+                        ruleCount: pipelineResult?.ruleCount ?? 0
                     )
                 }
 
                 await MainActor.run {
                     self.removeEscapeMonitor()
                     do {
-                        try TextInserter.insert(finalText)
-                        TranscriptionHistory.shared.append(finalText)
+                        let submitBehavior = GoModeSubmitStrategy.behavior(
+                            targetContext: submitTargetContext,
+                            ruleContext: ruleContext
+                        )
+                        if spokenSubmitCommand.shouldSubmit {
+                            vxLog("[coordinator/finishRecording] Spoken submit detected, behavior: \(submitBehavior.logName), inserted text empty: \(finalText.isEmpty)")
+                            if finalText.isEmpty {
+                                TextInserter.submit(behavior: submitBehavior)
+                            } else {
+                                try TextInserter.insert(finalText, submitBehavior: submitBehavior)
+                                TranscriptionHistory.shared.append(finalText)
+                            }
+                        } else {
+                            try TextInserter.insert(finalText)
+                            TranscriptionHistory.shared.append(finalText)
+                        }
                         self.hud.completeProcessing()
                     } catch {
                         self.logFailure(error.localizedDescription, dismissAfter: 2.5)
@@ -759,6 +883,183 @@ public final class AppCoordinator: NSObject {
             volumeController.restore()
         }
         hud.flashStatus(.cancelled, duration: 1.0)
+    }
+
+    private func toggleGoMode() {
+        if isGoModeActive {
+            stopGoMode(finishActive: true)
+        } else {
+            startGoMode()
+        }
+    }
+
+    private func startGoMode() {
+        guard !isGoModeActive, !isRecording else { return }
+
+        let targetApp = NSWorkspace.shared.frontmostApplication
+        goModeTargetBundleID = targetApp?.bundleIdentifier
+        goModeTargetAppName = targetApp?.localizedName
+        goModeTargetPID = targetApp?.processIdentifier ?? 0
+
+        let backendURL = appState.backendURL
+        let modelURL = appState.modelURL
+
+        do {
+            try FileValidator.validate(backendURL: backendURL, modelURL: modelURL)
+        } catch {
+            logFailure(error.localizedDescription, dismissAfter: 2.0)
+            return
+        }
+
+        let segmenter = GoModeSegmenter(
+            transcriber: transcriber,
+            modelURL: modelURL,
+            onTranscript: { [weak self] text in
+                self?.processGoModeTranscript(text)
+            },
+            onFailure: { [weak self] error in
+                guard let self else { return }
+                self.logFailure(error.localizedDescription, dismissAfter: 2.5)
+                self.stopGoMode(finishActive: false)
+            }
+        )
+
+        let startTime = Date()
+        let maxAttempts = 3
+        var startError: Error?
+        var started = false
+        for attempt in 1...maxAttempts {
+            do {
+                goModeCaptureURL = try audioCapture.startRecording(
+                    deviceUID: appState.selectedInputDeviceUID,
+                    sampleSink: { [weak segmenter] samples in
+                        segmenter?.ingest(samples: samples)
+                    }
+                )
+                started = true
+                if attempt > 1 { vxLog("[go-mode/start] capture succeeded on attempt \(attempt)/\(maxAttempts)") }
+                break
+            } catch {
+                startError = error
+                vxLog("[go-mode/start] capture attempt \(attempt)/\(maxAttempts) failed: \(error.localizedDescription)")
+                if attempt < maxAttempts { Thread.sleep(forTimeInterval: 0.25) }
+            }
+        }
+
+        guard started else {
+            segmenter.stop(finishActive: false)
+            logFailure("Couldn’t start Go mode microphone capture: \(startError?.localizedDescription ?? "unknown error")", dismissAfter: 3.0)
+            return
+        }
+
+        goModeSegmenter = segmenter
+        isGoModeActive = true
+        updateStatusItemAppearance(isActive: true)
+        installGoModeEscapeMonitor()
+        if appState.soundEffectsEnabled { soundPlayer.play("start.mp3") }
+        hud.showListening(
+            style: .goMode,
+            onCancel: { [weak self] in self?.stopGoMode(finishActive: false) },
+            onStop: { [weak self] in self?.stopGoMode(finishActive: true) }
+        )
+        vxLog("[go-mode/start] Active: capture \(String(format: "%.1f", Date().timeIntervalSince(startTime) * 1000))ms")
+        vxLog("[go-mode/start] Backend: \(backendURL.path)")
+        vxLog("[go-mode/start] Model: \(modelURL.path)")
+    }
+
+    private func stopGoMode(finishActive: Bool) {
+        guard isGoModeActive || goModeSegmenter != nil else { return }
+        isGoModeActive = false
+        removeEscapeMonitor()
+        updateStatusItemAppearance(isActive: isRecording)
+
+        goModeSegmenter?.stop(finishActive: finishActive)
+        goModeSegmenter = nil
+
+        if let url = audioCapture.stopRecording() ?? goModeCaptureURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        goModeCaptureURL = nil
+
+        if finishActive {
+            hud.hide()
+            vxLog("[go-mode/stop] Stopped")
+        } else {
+            for task in goModeProcessingTasks.values { task.cancel() }
+            goModeProcessingTasks.removeAll()
+            hud.flashStatus(.cancelled, duration: 1.0)
+            vxLog("[go-mode/stop] Cancelled")
+        }
+    }
+
+    private func processGoModeTranscript(_ rawText: String) {
+        let taskID = UUID()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                Task { @MainActor [weak self] in
+                    self?.goModeProcessingTasks[taskID] = nil
+                }
+            }
+
+            let targetApp = NSWorkspace.shared.frontmostApplication
+            let targetBundleID = targetApp?.bundleIdentifier ?? self.goModeTargetBundleID
+            let targetPID = targetApp?.processIdentifier ?? self.goModeTargetPID
+            let targetAppName = targetApp?.localizedName ?? self.goModeTargetAppName ?? "unknown"
+            let targetContext = targetBundleID.map { AppContextDetector.detect(bundleID: $0, pid: targetPID) }
+            let resolved = self.contextResolver.resolve(
+                autoDetect: self.appState.autoDetectMode,
+                bundleID: targetBundleID,
+                pid: targetPID,
+                manualMode: self.appState.currentMode,
+                manualProfile: self.appState.currentCodeProfile
+            )
+            let ruleContext = resolved.ruleContext
+            let postProcessing = self.makePostProcessingConfig(
+                ruleContext: ruleContext,
+                enabled: self.appState.usePostProcessingInGoMode
+            )
+            let session = DictationSession(
+                mode: ruleContext.mode,
+                codeProfile: ruleContext.codeProfile,
+                postProcessing: postProcessing
+            )
+
+            guard case .text(let finalText, let pipelineResult) = await self.dictationProcessor.process(rawText, session: session) else {
+                vxLog("[go-mode/process] No speech after processing, raw: \(rawText.debugDescription)")
+                return
+            }
+            guard !Task.isCancelled else { return }
+
+            let profileSuffix = ruleContext.mode == .code ? "/\(ruleContext.codeProfile.rawValue)" : ""
+            vxLog("[go-mode/process] Mode: \(ruleContext.mode.rawValue)\(profileSuffix), rules loaded: \(pipelineResult.ruleCount), transformed: \(pipelineResult.didTransform)")
+
+            let submitDelay = min(max(self.appState.goModeSubmitDelay, 0), 2)
+            if submitDelay > 0 {
+                vxLog("[go-mode/submit] Waiting \(String(format: "%.2f", submitDelay))s before submit")
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(submitDelay * 1_000_000_000))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+            }
+
+            await MainActor.run {
+                do {
+                    let submitBehavior = GoModeSubmitStrategy.behavior(
+                        targetContext: targetContext,
+                        ruleContext: ruleContext
+                    )
+                    vxLog("[go-mode/submit] Target: \(targetAppName) (\(targetBundleID ?? "unknown")), context: \(targetContext?.displayName ?? "unknown"), behavior: \(submitBehavior.logName)")
+                    try TextInserter.insert(finalText, submitBehavior: submitBehavior)
+                    TranscriptionHistory.shared.append(finalText)
+                } catch {
+                    self.logFailure(error.localizedDescription, dismissAfter: 2.5)
+                }
+            }
+        }
+        goModeProcessingTasks[taskID] = task
     }
 
     private func updateStatusItemAppearance(isActive: Bool) {
@@ -802,6 +1103,28 @@ public final class AppCoordinator: NSObject {
             DispatchQueue.main.async {
                 guard let self, self.isRecording else { return }
                 self.cancelRecording()
+            }
+        }
+    }
+
+    private func installGoModeEscapeMonitor() {
+        guard escapeGlobalMonitor == nil, escapeLocalMonitor == nil else { return }
+
+        let handler: (NSEvent) -> NSEvent? = { [weak self] event in
+            guard event.keyCode == CGKeyCode(kVK_Escape) else { return event }
+            DispatchQueue.main.async {
+                guard let self, self.isGoModeActive else { return }
+                self.stopGoMode(finishActive: false)
+            }
+            return nil
+        }
+
+        escapeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: handler)
+        escapeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == CGKeyCode(kVK_Escape) else { return }
+            DispatchQueue.main.async {
+                guard let self, self.isGoModeActive else { return }
+                self.stopGoMode(finishActive: false)
             }
         }
     }

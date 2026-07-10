@@ -386,8 +386,12 @@ struct AppContextDetector {
         case "com.apple.Terminal",
              "com.googlecode.iterm2",
              "dev.warp.desktop",
+             "com.mitchellh.ghostty",
+             "net.kovidgoyal.kitty",
              "com.github.wez.wezterm",
-             "io.alacritty":
+             "io.alacritty",
+             "co.zeit.hyper",
+             "com.eugeny.tabby":
             return .terminal
 
         default:
