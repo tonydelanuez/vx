@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.42] - 2026-07-12
+
+### Fixed
+- The `vx-rs` backend now weak-links Metal and MetalKit so releases built with newer macOS SDKs can start on macOS 14, even when newer Metal symbols are unavailable.
+
 ## [v1.0.41] - 2026-07-10
 
 ### Added

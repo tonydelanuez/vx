@@ -2,3 +2,19 @@
 # Use pre-generated bindings to avoid bindgen issues
 WHISPER_DONT_GENERATE_BINDINGS = "1"
 
+# whisper-rs-sys links Metal and MetalKit as ordinary frameworks. Recent SDKs
+# expose Metal symbols introduced after macOS 14, so a strong framework load
+# makes the backend fail before it can start on macOS 14. Keep the framework
+# loads optional; whisper.cpp can then fall back when newer Metal APIs are not
+# present.
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-weak_framework,Metal",
+    "-C", "link-arg=-Wl,-weak_framework,MetalKit",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-weak_framework,Metal",
+    "-C", "link-arg=-Wl,-weak_framework,MetalKit",
+]
