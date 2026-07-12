@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.43] - 2026-07-12
+
+### Fixed
+- AI post-processing no longer runs when a rule strips a transcript down to nothing. Previously, if a rule (e.g. one that removes filler words) reduced spoken audio to an empty string, vx would still send that empty text to the AI cleanup step instead of skipping it.
+
 ## [v1.0.42] - 2026-07-12
 
 ### Fixed

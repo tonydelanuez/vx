@@ -138,6 +138,13 @@ struct DictationProcessor {
             store: store
         )
 
+        // Rules can strip a non-empty transcript down to nothing (e.g. a filler-word
+        // rule matching the whole utterance) — bypass post-processing rather than
+        // asking the LLM to clean up an empty string.
+        guard !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .noSpeech
+        }
+
         guard let config = session.postProcessing else {
             return .text(result.output, result: result)
         }
