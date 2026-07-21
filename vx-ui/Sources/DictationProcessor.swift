@@ -110,6 +110,23 @@ enum PostProcessOutputGuard {
         if refusalOpeners.contains(where: { trimmed.hasPrefix($0) }) { return true }
         return false
     }
+
+    /// The post-processor is optional polish, not an authority allowed to silently
+    /// turn a multi-sentence dictation into its opening fragment. We deliberately
+    /// use a conservative word-count check rather than trying to judge semantic
+    /// equivalence: corrections, punctuation, and modest filler removal remain
+    /// valid, while losing roughly half of a substantive transcript falls back to
+    /// the deterministic Whisper/rule result.
+    static func dropsSubstantialContent(from input: String, to output: String) -> Bool {
+        let inputCount = wordCount(in: input)
+        let outputCount = wordCount(in: output)
+        guard inputCount >= 8 else { return false }
+        return outputCount < inputCount - 4 && Double(outputCount) / Double(inputCount) < 0.60
+    }
+
+    static func wordCount(in text: String) -> Int {
+        text.split { !$0.isLetter && !$0.isNumber }.count
+    }
 }
 
 // MARK: - DictationProcessor
@@ -145,6 +162,8 @@ struct DictationProcessor {
             return .noSpeech
         }
 
+        vxLog("[dictation-integrity] whisperWords=\(PostProcessOutputGuard.wordCount(in: sanitized)) ruleWords=\(PostProcessOutputGuard.wordCount(in: result.output))")
+
         guard let config = session.postProcessing else {
             return .text(result.output, result: result)
         }
@@ -155,13 +174,21 @@ struct DictationProcessor {
             vxLog("[processor/postprocess] Running via \(config.provider.rawValue)")
             let cleaned = try await postProcessor.run(result.output, config: config)
             if cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                vxLog("[processor/postprocess] Empty result, treating as no speech")
-                return .noSpeech
+                // The raw transcript already passed deterministic sanitization. An
+                // optional remote model is not authoritative enough to erase it:
+                // timeouts/errors already fall back, and an empty response must be
+                // handled the same way.
+                vxLog("[processor/postprocess] Empty result, using rule output")
+                return .text(result.output, result: result)
             }
             // Guard: if the model narrated/refused instead of cleaning, never insert
             // that — fall back to the deterministic rule-applied transcript.
             if PostProcessOutputGuard.looksLikeModelCommentary(cleaned) {
                 vxLog("[processor/postprocess] Output looks like model commentary; using rule output instead")
+                return .text(result.output, result: result)
+            }
+            if PostProcessOutputGuard.dropsSubstantialContent(from: result.output, to: cleaned) {
+                vxLog("[processor/postprocess] Output dropped substantial content (ruleWords=\(PostProcessOutputGuard.wordCount(in: result.output)), outputWords=\(PostProcessOutputGuard.wordCount(in: cleaned))); using rule output")
                 return .text(result.output, result: result)
             }
             vxLog("[processor/postprocess] Complete")

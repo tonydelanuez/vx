@@ -130,12 +130,27 @@ final class DictationProcessorTests: XCTestCase {
         guard case .text("hello", _) = outcome else { return XCTFail("expected unmodified .text") }
     }
 
-    func testEmptyPostProcessResultBecomesNoSpeech() async {
+    func testEmptyPostProcessResultFallsBackToRuleOutput() async {
         let fake = InMemoryPostProcessor(result: "   ")
         let processor = DictationProcessor(store: makeStore(rules: []), postProcessor: fake)
-        guard case .noSpeech = await processor.process("hello", session: sessionWithPostProcessing()) else {
-            return XCTFail("expected .noSpeech")
+        guard case .text(let output, _) = await processor.process("hello", session: sessionWithPostProcessing()) else {
+            return XCTFail("expected .text fallback")
         }
+        XCTAssertEqual(output, "hello")
+    }
+
+    func testEmptyPostProcessResultPreservesRuleAppliedText() async {
+        let fake = InMemoryPostProcessor(result: "")
+        let processor = DictationProcessor(
+            store: makeStore(rules: [RuleDefinition(trigger: "open brace", replace: "{")]),
+            postProcessor: fake
+        )
+
+        guard case .text(let output, _) = await processor.process("open brace", session: sessionWithPostProcessing()) else {
+            return XCTFail("expected .text fallback")
+        }
+        XCTAssertEqual(fake.received, "{")
+        XCTAssertEqual(output, "{")
     }
 
     func testModelCommentaryFallsBackToRuleOutput() async {
@@ -153,6 +168,31 @@ final class DictationProcessorTests: XCTestCase {
             return XCTFail("expected .text fallback")
         }
         XCTAssertEqual(output, "{", "model commentary should be discarded for the rule output")
+    }
+
+    func testPostProcessorCannotSilentlyDropMostOfASubstantiveTranscript() async {
+        // Mirrors the observed report: a full dictation was reduced to its opening
+        // sentence by the optional cleanup stage. The deterministic transcript is
+        // safer than an LLM response that has lost a whole thought.
+        let source = "I have an idea about the project setup and how we should merge the changes tomorrow."
+        let fake = InMemoryPostProcessor(result: "I have an idea.")
+        let processor = DictationProcessor(store: makeStore(rules: []), postProcessor: fake)
+
+        guard case .text(let output, _) = await processor.process(source, session: sessionWithPostProcessing()) else {
+            return XCTFail("expected deterministic fallback")
+        }
+        XCTAssertEqual(output, source)
+    }
+
+    func testPostProcessContentGuardAllowsNormalCleanup() {
+        XCTAssertFalse(PostProcessOutputGuard.dropsSubstantialContent(
+            from: "Um I think we should ship this change after lunch today.",
+            to: "I think we should ship this change after lunch today."
+        ))
+        XCTAssertTrue(PostProcessOutputGuard.dropsSubstantialContent(
+            from: "I have an idea about the project setup and how we should merge the changes tomorrow.",
+            to: "I have an idea."
+        ))
     }
 
     func testGuardDetectsRefusalsAndPassesCleanText() {

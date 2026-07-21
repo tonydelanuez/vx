@@ -52,6 +52,40 @@ fn stream_mode_missing_model_exits_nonzero() {
 }
 
 #[test]
+fn stream_mode_rejects_a_truncated_float32_sample() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let model = model_path();
+    if !model.exists() {
+        eprintln!("SKIP: {} not found", model.display());
+        return;
+    }
+
+    let mut child = Command::new(vxrs_bin())
+        .args(["stream", model.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to launch vx-rs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&[0, 1, 2])
+        .expect("failed to write malformed input");
+
+    let output = child.wait_with_output().expect("failed to wait for vx-rs");
+    assert!(!output.status.success(), "truncated f32 input must fail");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("incomplete byte"),
+        "expected a clear framing error, stderr was: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn stream_mode_empty_stdin_exits_cleanly() {
     use std::process::Stdio;
     let model = model_path();

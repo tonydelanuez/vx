@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.44] - 2026-07-20
+
+### Fixed
+- Whisper prompt echoes no longer cause an entire 30-second transcript chunk to be discarded. vx now removes only a recognized trailing echo and preserves the surrounding speech.
+- A Whisper failure while decoding one chunk now fails the transcription instead of silently omitting that chunk from the inserted text.
+- Streamed Float32 audio is now reassembled across arbitrary pipe-read boundaries; malformed partial samples fail clearly instead of corrupting subsequent audio.
+- If optional AI post-processing returns an empty response for a valid transcript, vx now falls back to the deterministic rule-applied text instead of deleting the dictation.
+- Optional AI post-processing can no longer silently reduce a substantive dictation to a short fragment; vx falls back to the deterministic transcript when it removes most of the words.
+
+### Added
+- `vx-rs/Scripts/evaluate-prompts.sh` compares the current, short, and no-prompt modes on the same WAV fixture, saving transcripts plus conservative per-chunk audio activity metrics for prompt/VAD evaluation.
+
 ## [v1.0.43] - 2026-07-12
 
 ### Fixed
