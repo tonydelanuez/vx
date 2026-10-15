@@ -42,6 +42,7 @@ Downloads go to `~/Library/Application Support/vx/Models/`.
 | Whisper Tiny | ~78 MB | Whisper, English |
 | Whisper Base | ~142 MB | Whisper, English |
 | Whisper Small | ~466 MB | Whisper, English |
+| Parakeet v2 (English) | ~482 MB | Parakeet TDT 0.6b v2 INT8, English only |
 | Parakeet v3 | ~487 MB | Parakeet TDT 0.6b v3 INT8, 25 languages |
 
 Whisper uses GGML `.bin` files from
@@ -52,13 +53,22 @@ The app checks its pinned SHA-256 before extraction and makes it selectable
 only after all four required files are present. Parakeet runs on the CPU.
 It needs no Python installation or external ONNX Runtime library.
 
+NVIDIA reports a lower average English word error rate for
+[v2 (6.05%)](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2#performance) than
+[v3 (6.34%)](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3#performance)
+on its published Open ASR benchmark results. Lower is better. These results
+describe NVIDIA's models, not a measured comparison of the INT8 builds in vx.
+Use v2 for English only or v3 for multilingual speech.
+
 The catalogue lives in `vx-ui/Sources/SpeechModel.swift`. Models are not
 checked into Git. Packaging includes Whisper models from Resources and leaves
 Parakeet as an optional download. For local verification, run
-`Scripts/ensure-model.sh` and `Scripts/ensure-parakeet-model.sh` from this directory.
+`Scripts/ensure-model.sh`, `Scripts/ensure-parakeet-model.sh v2`, and
+`Scripts/ensure-parakeet-model.sh v3` from this directory.
+The Parakeet script defaults to v3. `VX_PARAKEET_V2_MODEL_PATH` overrides the
+v2 path; `VX_PARAKEET_MODEL_PATH` retains its existing meaning as the v3 path.
 
-The [NVIDIA model](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-uses [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Both NVIDIA models use [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 See `vx-ui/Resources/Licenses/` for attribution and runtime license texts.
 
 ## How it works

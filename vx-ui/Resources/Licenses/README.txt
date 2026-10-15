@@ -8,11 +8,13 @@ ONNX Runtime, Copyright (c) Microsoft Corporation, MIT License.
 https://github.com/microsoft/onnxruntime
 See onnxruntime-LICENSE.txt.
 
-Optional model: NVIDIA parakeet-tdt-0.6b-v3, Copyright NVIDIA Corporation.
+Optional models: NVIDIA parakeet-tdt-0.6b-v2 and parakeet-tdt-0.6b-v3,
+Copyright NVIDIA Corporation.
 Licensed under Creative Commons Attribution 4.0 International:
 https://creativecommons.org/licenses/by/4.0/
-Original model and model card:
+Original models and model cards:
+https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
 https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
 vx downloads the ONNX conversion with INT8 weights distributed by sherpa-onnx:
 https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
-vx does not modify those downloaded weights. The model is a separate download.
+vx does not modify those downloaded weights. Each model is a separate download.

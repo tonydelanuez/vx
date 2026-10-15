@@ -81,6 +81,20 @@ extension SpeechModel {
             approximateSizeMB: 466,
             downloadURL: URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin")!
         ),
+        // NVIDIA reports English average WER of 6.05% for v2 and 6.34% for v3.
+        // These are upstream results, not measurements of our INT8 conversions.
+        // Sources: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2#performance
+        //          https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3#performance
+        SpeechModel(
+            id: "parakeet-tdt-0.6b-v2-int8",
+            displayName: "Parakeet v2 (English)",
+            detail: "Lower reported English error rate than v3. No GPU required.",
+            fileName: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+            approximateSizeMB: 482,
+            downloadURL: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2")!,
+            engine: .parakeet,
+            archiveSHA256: "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad"
+        ),
         SpeechModel(
             id: "parakeet-tdt-0.6b-v3-int8",
             displayName: "Parakeet v3",

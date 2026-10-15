@@ -1,16 +1,17 @@
-//! Recorded-audio contracts for the model offered by the app's Parakeet picker.
+//! Recorded-audio contracts for both models offered by the app's Parakeet picker.
 mod common;
 
 use common::*;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-fn model() -> Option<PathBuf> {
-    let path = std::env::var_os("VX_PARAKEET_MODEL_PATH")
+fn model(engine: &str, override_variable: &str) -> Option<PathBuf> {
+    let path = std::env::var_os(override_variable)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../vx-ui/Resources/Models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../vx-ui/Resources/Models/sherpa-onnx-nemo-{engine}"
+            ))
         });
     if path.join("encoder.int8.onnx").is_file() {
         return Some(path);
@@ -18,14 +19,17 @@ fn model() -> Option<PathBuf> {
     assert_ne!(
         std::env::var("VX_REQUIRE_PARAKEET").as_deref(),
         Ok("1"),
-        "Parakeet is required but missing at {}. Run Scripts/ensure-parakeet-model.sh",
+        "{engine} is required but missing at {}. Run Scripts/ensure-parakeet-model.sh v2 and v3",
         path.display()
     );
-    eprintln!("SKIP: Parakeet model missing at {}", path.display());
+    eprintln!("SKIP: {engine} model missing at {}", path.display());
     None
 }
 
-const ENGINE: &str = "parakeet-tdt-0.6b-v3-int8";
+const MODELS: [(&str, &str); 2] = [
+    ("parakeet-tdt-0.6b-v2-int8", "VX_PARAKEET_V2_MODEL_PATH"),
+    ("parakeet-tdt-0.6b-v3-int8", "VX_PARAKEET_MODEL_PATH"),
+];
 const FIXTURES: [&str; 7] = [
     "short-phrase",
     "punctuation-numbers",
@@ -38,37 +42,56 @@ const FIXTURES: [&str; 7] = [
 
 #[test]
 fn parakeet_stream_matches_recorded_audio() {
-    let Some(model) = model() else { return };
     let _guard = model_guard();
-    for name in FIXTURES {
-        let output = run_stream(&model, &read_wav_f32(&fixture(name)));
-        assert_golden(name, ENGINE, &stdout_text(&output));
+    for (engine, override_variable) in MODELS {
+        let Some(model) = model(engine, override_variable) else {
+            continue;
+        };
+        for name in FIXTURES {
+            let output = run_stream(&model, &read_wav_f32(&fixture(name)));
+            assert_golden(name, engine, &stdout_text(&output));
+        }
     }
 }
 
 #[test]
 fn parakeet_file_and_stream_agree() {
-    let Some(model) = model() else { return };
     let _guard = model_guard();
-    for name in ["short-phrase", "long-60s"] {
-        let wav = fixture(name);
-        let from_file = stdout_text(&run_file(&model, &wav));
-        let from_stream = stdout_text(&run_stream(&model, &read_wav_f32(&wav)));
-        assert_golden(name, ENGINE, &from_file);
-        assert_eq!(normalize(&from_file), normalize(&from_stream));
-        assert!(
-            !from_stream.trim().contains('\n'),
-            "stream must emit one line"
-        );
+    for (engine, override_variable) in MODELS {
+        let Some(model) = model(engine, override_variable) else {
+            continue;
+        };
+        for name in ["short-phrase", "long-60s"] {
+            let wav = fixture(name);
+            let from_file = stdout_text(&run_file(&model, &wav));
+            let from_stream = stdout_text(&run_stream(&model, &read_wav_f32(&wav)));
+            assert_golden(name, engine, &from_file);
+            assert_eq!(
+                normalize(&from_file),
+                normalize(&from_stream),
+                "{engine}/{name}"
+            );
+            assert!(
+                !from_stream.trim().contains('\n'),
+                "stream must emit one line"
+            );
+        }
     }
 }
 
 #[test]
 fn parakeet_empty_and_silent_audio_produce_no_text() {
-    let Some(model) = model() else { return };
     let _guard = model_guard();
-    for samples in [vec![], vec![0.0; 5 * 16_000]] {
-        assert!(stdout_text(&run_stream(&model, &samples)).is_empty());
+    for (engine, override_variable) in MODELS {
+        let Some(model) = model(engine, override_variable) else {
+            continue;
+        };
+        for samples in [vec![], vec![0.0; 5 * 16_000]] {
+            assert!(
+                stdout_text(&run_stream(&model, &samples)).is_empty(),
+                "{engine}"
+            );
+        }
     }
 }
 

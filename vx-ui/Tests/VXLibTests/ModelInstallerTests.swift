@@ -4,7 +4,7 @@ import XCTest
 final class ModelInstallerTests: XCTestCase {
     private var root: URL!
     private var destination: URL { root.appendingPathComponent("installed") }
-    private var parakeet: SpeechModel { SpeechModel.catalog.first { $0.isParakeet }! }
+    private var parakeet: SpeechModel { SpeechModel.find(id: "parakeet-tdt-0.6b-v3-int8")! }
 
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -12,14 +12,15 @@ final class ModelInstallerTests: XCTestCase {
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
-    private func archive(files: [String]) throws -> URL {
-        let source = root.appendingPathComponent(parakeet.fileName)
+    private func archive(files: [String], model: SpeechModel? = nil) throws -> URL {
+        let model = model ?? parakeet
+        let source = root.appendingPathComponent(model.fileName)
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
         for file in files { try Data("test weights".utf8).write(to: source.appendingPathComponent(file)) }
         let archive = root.appendingPathComponent("model.tar.bz2")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = ["-cjf", archive.path, "-C", root.path, parakeet.fileName]
+        process.arguments = ["-cjf", archive.path, "-C", root.path, model.fileName]
         try process.run()
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
@@ -27,12 +28,15 @@ final class ModelInstallerTests: XCTestCase {
     }
 
     func testParakeetInstallsOnlyWhenAllFilesArePresent() throws {
-        var model = parakeet
-        let download = try archive(files: SpeechModel.parakeetFiles)
-        model.archiveSHA256 = try ModelInstaller.sha256(download)
-        try ModelInstaller.install(model, from: download, into: destination)
-        XCTAssertTrue(model.isComplete(at: destination.appendingPathComponent(model.fileName)))
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [model.fileName])
+        let models = SpeechModel.catalog.filter(\.isParakeet)
+        XCTAssertEqual(models.count, 2)
+        for var model in models {
+            let download = try archive(files: SpeechModel.parakeetFiles, model: model)
+            model.archiveSHA256 = try ModelInstaller.sha256(download)
+            try ModelInstaller.install(model, from: download, into: destination)
+            XCTAssertTrue(model.isComplete(at: destination.appendingPathComponent(model.fileName)))
+        }
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: destination.path)), Set(models.map(\.fileName)))
     }
 
     func testChecksumFailurePreservesInstalledModel() throws {
@@ -96,7 +100,7 @@ final class ModelInstallerTests: XCTestCase {
         XCTAssertEqual(Array(SpeechModel.catalog.prefix(3).map(\.id)), ["tiny.en", "base.en", "small.en"])
         let suite = TestDefaults.makeSuite()
         defer { TestDefaults.destroy(suite.name) }
-        for model in [parakeet, SpeechModel.defaultModel] {
+        for model in SpeechModel.catalog {
             AppState(defaults: suite.defaults).selectedModelName = model.id
             let reloaded = AppState(defaults: suite.defaults)
             XCTAssertEqual(reloaded.selectedModelName, model.id)

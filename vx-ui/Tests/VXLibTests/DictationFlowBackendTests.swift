@@ -3,7 +3,7 @@ import XCTest
 @testable import VXLib
 
 /// Swift-side engine contract test: drives a whole Dictation Flow against the *real*
-/// `vx-rs` subprocess and the bundled tiny.en model, replaying a WAV fixture through the
+/// `vx-rs` subprocess and the Whisper and Parakeet models, replaying a WAV fixture through the
 /// Audio Source seam instead of a microphone.
 ///
 /// Opt-in (`VX_FLOW_BACKEND=1`) because it needs a built backend and takes seconds rather
@@ -34,20 +34,29 @@ final class DictationFlowBackendTests: XCTestCase {
         try await checkFixture(modelURL: Self.modelURL)
     }
 
-    private static var parakeetURL: URL {
-        if let path = ProcessInfo.processInfo.environment["VX_PARAKEET_MODEL_PATH"] {
+    private static func parakeetURL(version: String) -> URL {
+        let variable = version == "v2" ? "VX_PARAKEET_V2_MODEL_PATH" : "VX_PARAKEET_MODEL_PATH"
+        if let path = ProcessInfo.processInfo.environment[variable] {
             return URL(fileURLWithPath: path)
         }
-        let model = SpeechModel.catalog.first { $0.isParakeet }!
+        let model = SpeechModel.find(id: "parakeet-tdt-0.6b-\(version)-int8")!
         return packageDirectory.appendingPathComponent("Resources/Models/\(model.fileName)")
     }
 
     func testParakeetTranscribesFixtureAndInsertsText() async throws {
-        try await checkFixture(modelURL: Self.parakeetURL)
+        try await checkFixture(modelURL: Self.parakeetURL(version: "v3"))
     }
 
     func testParakeetGoModeInsertsBothUtterances() async throws {
-        try await checkFixture(modelURL: Self.parakeetURL, goMode: true)
+        try await checkFixture(modelURL: Self.parakeetURL(version: "v3"), goMode: true)
+    }
+
+    func testParakeetV2TranscribesFixtureAndInsertsText() async throws {
+        try await checkFixture(modelURL: Self.parakeetURL(version: "v2"))
+    }
+
+    func testParakeetV2GoModeInsertsBothUtterances() async throws {
+        try await checkFixture(modelURL: Self.parakeetURL(version: "v2"), goMode: true)
     }
 
     private func checkFixture(modelURL: URL, goMode: Bool = false) async throws {

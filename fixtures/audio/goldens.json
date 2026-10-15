@@ -1,5 +1,18 @@
 {
   "long-45s": {
+    "parakeet-tdt-0.6b-v2-int8": {
+      "text": "The lighthouse keeper climbed the spiral stairs every evening at dusk, he carried a brass lantern, a thermos of tea, and a worn logbook, from the top he could see the fishing boats returning to the harbor, their lamps swaying on the dark water, on clear nights the stars were so bright that he rarely needed the lantern at all. He wrote the weather in the logbook, noted the ships that passed, and wound the great clockwork that turned the lands, the beam swept across the bay every 12 seconds, steady as a heartbeat. In winter the wind howled through the gallery and salt spray froze on the railing, still he climbed, every evening, because the light had to shine. After 40 years he knew every stone of the tower and every mood of the sea. When the automatic lamp finally arrived, he stayed on for one more season, just to be sure it worked.",
+      "required": [
+        "lighthouse",
+        "keeper",
+        "lantern",
+        "logbook",
+        "harbor",
+        "tower",
+        "season"
+      ],
+      "max_wer": 0.3
+    },
     "parakeet-tdt-0.6b-v3-int8": {
       "text": "The lighthouse keeper climbed the spiral stairs every evening at dusk, he carried a brass lantern, a thermos of tea, and a worn logbook. From the top he could see the fishing boats returning to the harbour, their lamp swaying on the dark water, on clear nights the stars were so bright that he rarely needed the lantern at all. He wrote the weather in the logbook, noted the ships that passed, and wound the great clockwork that turned the lands, the beam swept across the bay every twelve seconds, steady as a heartbeat. In winter the wind howled through the gallery and salt spray froze on the railing. Still he climbed, every evening, because the light had to shine. After forty years he knew every stone of the tower and every mood of the sea. When the automatic lamp finally arrived, he stayed on for one more season, just to be sure it worked.",
       "required": [
@@ -28,6 +41,19 @@
     }
   },
   "long-60s": {
+    "parakeet-tdt-0.6b-v2-int8": {
+      "text": "Sarah had lived in the old house on Maple Street for as long as anyone could remember. The walls were painted a pale yellow that caught the morning light, and the windows rattled whenever the wind picked up. Strange noises came from the attic at night, but she had long since stopped being afraid of them. Every morning she walked to the bakery on the corner, bought a single loaf of rye bread, and talked with the owner about the weather. In the afternoons she tended the garden, pulling weeds from between the tomato plants and watering the roses that climbed the fence. The neighbors said she was quiet, but she simply preferred listening to talking. On Sundays her nephew visited and they played chess on the porch until the sun went down. She usually won. When the town council proposed tearing down the old houses to build a shopping center, Sarah wrote a letter to the newspaper. The letter was published on the front page and the plan was quietly dropped. Fifty years later, the house still stands, and the yellow paint still catches the morning light, the earth turns, the sun rises, and somewhere in distant world someone is scrubbing a floor and thinking of home.",
+      "required": [
+        "sarah",
+        "maple",
+        "yellow",
+        "bakery",
+        "garden",
+        "chess",
+        "newspaper"
+      ],
+      "max_wer": 0.3
+    },
     "parakeet-tdt-0.6b-v3-int8": {
       "text": "Sarah had lived in the old house on Maple Street for as long as anyone could remember. The walls were painted a pale yellow that caught the morning light, and the windows rattled whenever the wind picked up. Strange noises came from the attic at night, but she had long since stopped being afraid of them. Every morning she walked to the bakery on the corner, bought a single loaf of rye bread, and talked with the owner about the weather. In the afternoons she tended the garden, pulling weeds from between the tomato plants and watering the roses that climbed the fence. The neighbor said she was quiet, but she simply preferred listening to talking. On Sundays her nephew visited and they played chess on the porch until the sun went down. She usually won. When the town council proposed tearing down the old houses to build a shopping center, Sarah wrote a letter to the newspaper. The letter was published on the front page and the plan was quietly dropped. Fifty years later, the house still stands, and the yellow paint still catches the morning light, the earth turns, the sun rises, and somewhere in distant world, someone is scrubbing a floor and thinking of home.",
       "required": [
@@ -56,6 +82,16 @@
     }
   },
   "punctuation-numbers": {
+    "parakeet-tdt-0.6b-v2-int8": {
+      "text": "Meet me at 4:30 on March 3 and bring 12 apples.",
+      "required": [
+        "meet",
+        "march",
+        "bring",
+        "apples"
+      ],
+      "max_wer": 0.35
+    },
     "parakeet-tdt-0.6b-v3-int8": {
       "text": "Meet me at 430 on March 3rd, and bring twelve apples.",
       "required": [
@@ -78,6 +114,17 @@
     }
   },
   "rule-trigger": {
+    "parakeet-tdt-0.6b-v2-int8": {
+      "text": "Open brace new line close brace.",
+      "required": [
+        "open",
+        "brace",
+        "new",
+        "line",
+        "close"
+      ],
+      "max_wer": 0.25
+    },
     "parakeet-tdt-0.6b-v3-int8": {
       "text": "Open brace new line close brace.",
       "required": [
@@ -102,6 +149,18 @@
     }
   },
   "short-phrase": {
+    "parakeet-tdt-0.6b-v2-int8": {
+      "text": "The quick brown fox jumps over the lazy dog.",
+      "required": [
+        "quick",
+        "brown",
+        "fox",
+        "jumps",
+        "lazy",
+        "dog"
+      ],
+      "max_wer": 0.2
+    },
     "parakeet-tdt-0.6b-v3-int8": {
       "text": "The quick brown fox jumps over the lazy dog.",
       "required": [
@@ -128,6 +187,16 @@
     }
   },
   "spoken-submit": {
+    "parakeet-tdt-0.6b-v2-int8": {
+      "text": "Send the report to the team submit.",
+      "required": [
+        "send",
+        "report",
+        "team",
+        "submit"
+      ],
+      "max_wer": 0.25
+    },
     "parakeet-tdt-0.6b-v3-int8": {
       "text": "Send the report to the team submit.",
       "required": [
@@ -150,6 +219,15 @@
     }
   },
   "two-utterances": {
+    "parakeet-tdt-0.6b-v2-int8": {
+      "text": "This is the first sentence. This is the second sentence.",
+      "required": [
+        "first",
+        "sentence",
+        "second"
+      ],
+      "max_wer": 0.25
+    },
     "parakeet-tdt-0.6b-v3-int8": {
       "text": "This is the first sentence. This is the second sentence.",
       "required": [

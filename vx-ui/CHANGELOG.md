@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.47] - 2026-10-15
+
+### Added
+- Choose Parakeet v2 (English) alongside Parakeet v3. Its description notes the lower English error rate reported by NVIDIA. Both models run on CPU and require no GPU.
+- Recorded-audio verification covers both Parakeet versions, including dictation, Go Mode, long recordings, and independent saved selection.
+
 ## [v1.0.46] - 2026-10-15
 
 ### Added
