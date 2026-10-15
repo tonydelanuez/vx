@@ -85,48 +85,38 @@ enum TranscriberError: LocalizedError {
 /// Stdout is consumed live via `readabilityHandler`. `finish()` closes stdin
 /// (triggering vx-rs's final inference), waits for the process to exit, then
 /// returns the accumulated transcript.
-final class StreamingTranscription: TranscriptionSession {
+// Mutable state belongs to inputQueue or lock. Sessions cross capture and finish threads.
+final class StreamingTranscription: TranscriptionSession, @unchecked Sendable {
     /// The subprocess stdin pipe. Fully private — callers push audio via `write(samples:)`.
     private let stdinHandle: FileHandle
+    private let inputQueue = DispatchQueue(label: "voice.vx.transcriber.input", qos: .userInitiated)
 
     // MARK: TranscriptionSession
 
-    /// Serializes f32 frames to raw little-endian bytes and writes them to the
-    /// subprocess stdin pipe. `FileHandle.write` does not block on the audio thread
-    /// for a pipe with buffer space, satisfying the session's write contract.
-    ///
-    /// Uses the throwing `write(contentsOf:)` rather than the legacy `write(_:)`: the
-    /// legacy call raises an **ObjC exception** on a write error, which is uncatchable
-    /// from Swift and crashes the app. Once the backend has exited, every frame the
-    /// capture thread pushes hits `EPIPE`, so this is the normal path for a dead
-    /// backend, not an exotic one. (`SIGPIPE` itself is ignored process-wide in
-    /// `AppDelegate.ignoreSIGPIPE()`, or the signal would kill us before we got here.)
-    ///
-    /// The error is swallowed deliberately: `finish()` is what reports a broken
-    /// backend, via the subprocess's non-zero exit status. Failing here would only
-    /// race that with a less informative message, and this runs on the audio thread.
+    /// Queue pipe writes so a cold or stalled backend cannot block capture.
+    /// The queue also orders EOF after every frame from the stopped audio source.
     func write(samples: [Float]) {
         guard !samples.isEmpty else { return }
         let data = samples.withUnsafeBytes { Data($0) }
-        do {
-            try stdinHandle.write(contentsOf: data)
-        } catch {
-            // Log once: a dead backend produces one of these per audio buffer.
-            writeFailureLock.lock()
-            let alreadyLogged = loggedWriteFailure
-            loggedWriteFailure = true
-            writeFailureLock.unlock()
-            if !alreadyLogged {
-                vxLog("[transcriber/stream] stdin write failed (backend gone?): \(error)")
+        inputQueue.async { [self] in
+            do {
+                try stdinHandle.write(contentsOf: data)
+            } catch {
+                // finish() reports the backend's exit status. Log a broken pipe once.
+                if !loggedWriteFailure {
+                    loggedWriteFailure = true
+                    vxLog("[transcriber/stream] stdin write failed (backend gone?): \(error)")
+                }
             }
         }
     }
 
-    /// One-shot latch so a dead backend does not spam the log once per audio buffer.
-    /// Its own lock, not the shared `lock`: this runs on the audio thread, which must
-    /// not contend with the stdout reader.
-    private let writeFailureLock = NSLock()
+    // Accessed only on inputQueue.
     private var loggedWriteFailure = false
+
+    private func closeInput() {
+        inputQueue.async { [self] in try? stdinHandle.close() }
+    }
 
     private let process: Process
     private let stderrPipe: Pipe
@@ -224,12 +214,12 @@ final class StreamingTranscription: TranscriptionSession {
                         replayEOF()
                         // stdin is already broken in this path; closing it is harmless
                         // but pointless, and `waitUntilExit` in the callback covers us.
-                        try? self.stdinHandle.close()
+                        self.closeInput()
                         return
                     }
 
                     // Close stdin — vx-rs will run final inference and exit.
-                    try? self.stdinHandle.close()
+                    self.closeInput()
                 }
             },
             onCancel: {
@@ -246,7 +236,7 @@ final class StreamingTranscription: TranscriptionSession {
 
                 vxLog("[transcriber/stream] Cancellation requested — terminating process")
                 self.process.terminate()
-                try? self.stdinHandle.close()
+                self.closeInput()
                 cont?.resume(throwing: CancellationError())
             }
         )
@@ -255,7 +245,7 @@ final class StreamingTranscription: TranscriptionSession {
     /// Terminates the process immediately (used when recording is cancelled).
     func cancel() {
         process.terminate()
-        try? stdinHandle.close()
+        closeInput()
         lock.lock()
         onEOF = nil
         lock.unlock()

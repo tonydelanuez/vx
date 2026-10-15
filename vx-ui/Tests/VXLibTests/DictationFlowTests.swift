@@ -186,6 +186,8 @@ final class DictationFlowTests: XCTestCase {
         rules: [RuleDefinition] = [],
         spokenSubmitPhrases: [String] = [],
         goModeSubmitDelay: TimeInterval = 0,
+        postProcessor: PostProcessor = PassthroughPostProcessor(),
+        postProcessing: PostProcessingConfig? = nil,
         backendURL: URL = URL(fileURLWithPath: "/usr/bin/true"),
         modelURL providedModel: URL? = nil,
         pacing: WAVFileAudioSource.Pacing = .immediate
@@ -215,7 +217,7 @@ final class DictationFlowTests: XCTestCase {
             manualProfile: .generic,
             spokenSubmitPhrases: spokenSubmitPhrases,
             goModeSubmitDelay: goModeSubmitDelay,
-            postProcessing: { _, _ in nil }
+            postProcessing: { _, _ in postProcessing }
         )
 
         let dependencies = DictationFlow.Dependencies(
@@ -223,7 +225,7 @@ final class DictationFlowTests: XCTestCase {
             transcriber: transcriber,
             processor: DictationProcessor(
                 store: makeRuleStore(rules: rules),
-                postProcessor: PassthroughPostProcessor()
+                postProcessor: postProcessor
             ),
             contextResolver: resolver,
             textInserter: inserter,
@@ -671,6 +673,28 @@ final class DictationFlowTests: XCTestCase {
         XCTAssertEqual(h.history.entries.count, 2)
     }
 
+    func testGoModeSerializesSlowCleanupAndInsertion() async throws {
+        let counter = Counter()
+        let transcriber = InMemoryTranscriber()
+        transcriber.sessionFactory = {
+            InMemoryTranscriptionSession(finalText: "utterance \(counter.next())")
+        }
+        let cleanup = SlowFirstCleanup()
+        let config = PostProcessingConfig(provider: .openAI, model: "test", apiKey: "test",
+            customBaseURL: "", customPrompt: "", customDictionary: [], contextHint: "",
+            smoothDisfluencies: false)
+        let h = makeFlow(fixture: "two-utterances", transcriber: transcriber,
+                         postProcessor: cleanup, postProcessing: config)
+        h.flow.startGoMode()
+        try await h.recorder.wait(forEventNamed: "audioSourceDrained", timeout: 10)
+        h.flow.stopGoMode(finishActive: true)
+        try await h.recorder.wait(forEventNamed: "textInserted", count: 2, timeout: 10)
+        await h.flow.waitForIdle()
+        let maximumConcurrency = await cleanup.maximumConcurrency
+        XCTAssertEqual(maximumConcurrency, 1)
+        XCTAssertEqual(h.inserter.insertions.map(\.text), ["utterance 1", "utterance 2"])
+    }
+
     func testStopGoModeCancelledDropsPendingInsertions() async throws {
         let counter = Counter()
         let transcriber = InMemoryTranscriber()
@@ -808,4 +832,16 @@ final class BlockingTranscriber: Transcriber {
     let session: BlockingTranscriptionSession
     init(session: BlockingTranscriptionSession) { self.session = session }
     func begin(model: URL) throws -> TranscriptionSession { session }
+}
+
+private actor SlowFirstCleanup: PostProcessor {
+    private var active = 0
+    private(set) var maximumConcurrency = 0
+    func run(_ text: String, config: PostProcessingConfig) async throws -> String {
+        active += 1
+        maximumConcurrency = max(maximumConcurrency, active)
+        defer { active -= 1 }
+        if text == "utterance 1" { try await Task.sleep(nanoseconds: 200_000_000) }
+        return text
+    }
 }

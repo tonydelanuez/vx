@@ -339,7 +339,7 @@ struct PreferencesView: View {
                     Text("Transcription Model")
                         .font(.headline)
                     VStack(spacing: 0) {
-                        ForEach(Array(WhisperModel.catalog.enumerated()), id: \.element.id) { index, model in
+                        ForEach(Array(SpeechModel.catalog.enumerated()), id: \.element.id) { index, model in
                             ModelRow(
                                 model: model,
                                 state: modelManager.states[model.id] ?? .notInstalled,
@@ -351,7 +351,7 @@ struct PreferencesView: View {
                                 onRemove: { modelManager.remove(model, activeModelId: appState.selectedModelName) }
                             )
                             .accessibilityIdentifier(AXID.prefsConfigModelRow(model.id))
-                            if index < WhisperModel.catalog.count - 1 {
+                            if index < SpeechModel.catalog.count - 1 {
                                 Divider().padding(.leading, 32)
                             }
                         }
@@ -1369,8 +1369,8 @@ struct PreferencesView: View {
                 Text("Resources")
                     .font(.headline)
                 ResourcePathRow(label: "Backend", path: appState.backendURL.path)
-                ResourcePathRow(label: "Whisper Model", path: appState.modelURL.path)
-                Text("Files are loaded from the app bundle via Bundle.main.")
+                ResourcePathRow(label: "Speech Model", path: appState.modelURL.path)
+                Text("Models can be bundled or downloaded to Application Support.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1599,7 +1599,7 @@ struct PreferencesView: View {
 #endif
 
 private struct ModelRow: View {
-    let model: WhisperModel
+    let model: SpeechModel
     let state: ModelInstallState
     let isActive: Bool
     let isBundledOnly: Bool
@@ -1620,7 +1620,7 @@ private struct ModelRow: View {
             // Model info
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(model.displayName)
+                    Text(model.isParakeet ? model.displayName : "Whisper \(model.displayName)")
                         .fontWeight(.medium)
                     Text("—")
                         .foregroundStyle(.tertiary)
@@ -1676,12 +1676,31 @@ private struct ModelRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                    .frame(width: 28, alignment: .trailing)
+                    .frame(width: 36, alignment: .trailing)
+                    .fixedSize(horizontal: true, vertical: false)
                 Button("Cancel", action: onCancel)
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .foregroundStyle(.secondary)
             }
+
+        case .installing:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Installing…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .cancelling:
+            Text("Cancelling…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
         case .notInstalled:
             Button("Download (\(model.sizeLabel))", action: onDownload)

@@ -110,6 +110,7 @@ final class DictationFlow {
     /// finishes late can only clear its own handle and never a newer recording's.
     private var transcriptionToken = 0
     private var goModeProcessingTasks: [UUID: Task<Void, Never>] = [:]
+    private var goModeProcessingTail: Task<Void, Never>?
     private var goModeSegmenter: GoModeSegmenter?
 
     private var recordingSettings: DictationSettings?
@@ -504,9 +505,13 @@ final class DictationFlow {
         let settings = deps.settings()
         let storedTarget = goModeTarget
         let taskID = UUID()
+        let previous = goModeProcessingTail
         let task = Task { [weak self] in
             guard let self else { return }
             defer { self.goModeProcessingTasks[taskID] = nil }
+            // Serialize rule-store access and optional cleanup through text insertion.
+            await previous?.value
+            guard !Task.isCancelled else { return }
 
             let liveTarget = self.deps.frontmostApp()
             let targetBundleID = liveTarget?.bundleID ?? storedTarget?.bundleID
@@ -577,6 +582,7 @@ final class DictationFlow {
             }
         }
         goModeProcessingTasks[taskID] = task
+        goModeProcessingTail = task
     }
 
     // MARK: - Teardown / test support

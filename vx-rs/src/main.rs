@@ -10,6 +10,8 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
 
+mod parakeet;
+
 /// Target Whisper sample rate in hertz.
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 /// Maximum amount of audio represented by a single inference pass.
@@ -92,7 +94,7 @@ fn performance_core_count() -> Option<usize> {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "vx-rs", version, about = "Transcribe audio with whisper.cpp")]
+#[command(name = "vx-rs", version, about = "Transcribe audio with Whisper or Parakeet")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -108,7 +110,7 @@ enum Command {
 
 #[derive(Args, Debug)]
 struct FileArgs {
-    /// Path to the GGML model (e.g. ggml-tiny.en.bin)
+    /// Path to a Whisper GGML file or a Parakeet ONNX model directory
     #[arg(value_name = "MODEL")]
     model: PathBuf,
     /// Path to a 16 kHz, mono WAV file
@@ -130,7 +132,7 @@ struct FileArgs {
 
 #[derive(Args, Debug)]
 struct StreamArgs {
-    /// Path to the GGML model (e.g. ggml-tiny.en.bin)
+    /// Path to a Whisper GGML file or a Parakeet ONNX model directory
     #[arg(value_name = "MODEL")]
     model: PathBuf,
     /// Number of inference threads to use
@@ -281,6 +283,13 @@ impl AudioBuffer {
 fn run_file(cfg: FileConfig) -> Result<(), Box<dyn Error>> {
     let audio_data = load_mono_audio(&cfg.audio)?;
 
+    if cfg.model.is_dir() {
+        let engine = parakeet::Parakeet::load(&cfg.model, cfg.inference.threads)?;
+        let text = engine.transcribe(&audio_data)?;
+        if !text.is_empty() { println!("{text}"); }
+        return Ok(());
+    }
+
     let model_path = cfg.model.to_string_lossy().to_string();
     let mut ctx_params = WhisperContextParameters::default();
     ctx_params.use_gpu(true); // Metal GPU on Apple Silicon; whisper.cpp falls back to CPU if unavailable.
@@ -303,12 +312,18 @@ fn run_file(cfg: FileConfig) -> Result<(), Box<dyn Error>> {
 /// Reads raw f32 LE samples from stdin, buffers the full recording, and prints the
 /// transcript when stdin closes (EOF = recording done).
 fn run_stream(cfg: StdinStreamConfig) -> Result<(), Box<dyn Error>> {
-    let model_path = cfg.model.to_string_lossy().to_string();
-    let mut ctx_params = WhisperContextParameters::default();
-    ctx_params.use_gpu(true); // Metal GPU on Apple Silicon; whisper.cpp falls back to CPU if unavailable.
-    let ctx = WhisperContext::new_with_params(&model_path, ctx_params)
-        .map_err(|e| format!("failed to load model {}: {e}", cfg.model.display()))?;
-    let mut state = ctx.create_state()?;
+    // Load the selected engine before reading frames. Both engines use the same
+    // stdin framing and finish-on-EOF contract.
+    let parakeet = if cfg.model.is_dir() {
+        Some(parakeet::Parakeet::load(&cfg.model, cfg.inference.threads)?)
+    } else { None };
+    let mut whisper = if parakeet.is_none() {
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(true);
+        let ctx = WhisperContext::new_with_params(&cfg.model.to_string_lossy(), params)
+            .map_err(|e| format!("failed to load model {}: {e}", cfg.model.display()))?;
+        Some(ctx.create_state()?)
+    } else { None };
 
     // Spawn a reader thread that converts stdin bytes → f32 chunks → channel.
     // Reads can split one Float32 across calls, so framing is preserved explicitly.
@@ -375,12 +390,16 @@ fn run_stream(cfg: StdinStreamConfig) -> Result<(), Box<dyn Error>> {
     // to avoid truncating long recordings. A chunk failure must fail the session:
     // returning a partial transcript silently deletes what the speaker said.
     if session.buffer().len() >= MIN_TRANSCRIBE_SAMPLES {
-        let parts = collect_chunk_transcripts(
-            session.buffer(),
-            cfg.inference.report_audio_metrics,
-            |chunk| transcribe(&mut state, &cfg.inference, chunk),
-        )?;
-        let text = parts.join(" ");
+        let text = if let Some(engine) = parakeet {
+            engine.transcribe(session.buffer())?
+        } else {
+            let state = whisper.as_mut().expect("Whisper loaded for a GGML model");
+            collect_chunk_transcripts(
+                session.buffer(),
+                cfg.inference.report_audio_metrics,
+                |chunk| transcribe(state, &cfg.inference, chunk),
+            )?.join(" ")
+        };
         if !text.is_empty() {
             println!("{}", text);
             io::stdout().flush().ok();

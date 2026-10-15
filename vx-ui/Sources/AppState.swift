@@ -246,7 +246,7 @@ public final class AppState: ObservableObject {
         autoDetectMode = defaults.bool(forKey: "vx.auto-detect-mode")
         currentMode = DictationMode(rawValue: defaults.string(forKey: "vx.dictation-mode") ?? "") ?? .plainText
         currentCodeProfile = CodeProfile(rawValue: defaults.string(forKey: "vx.code-profile") ?? "") ?? .generic
-        selectedModelName = defaults.string(forKey: "vx.selected-model") ?? WhisperModel.defaultModel.id
+        selectedModelName = defaults.string(forKey: "vx.selected-model") ?? SpeechModel.defaultModel.id
 
         if !isPostProcessingEnabled {
             usePostProcessingInGoMode = false
@@ -274,12 +274,14 @@ public final class AppState: ObservableObject {
     }
 
     public var modelURL: URL {
-        if let model = WhisperModel.find(id: selectedModelName),
-           let url = ModelManager.resolvedModelURL(fileName: model.fileName) {
-            return url
+        if let model = SpeechModel.find(id: selectedModelName) {
+            // Preserve the selected engine. A missing model must surface as an
+            // error instead of silently transcribing with a different engine.
+            return ModelManager.resolvedModelURL(fileName: model.fileName)
+                ?? ModelManager.userModelsDirectoryURL().appendingPathComponent(model.fileName)
         }
         // Selected model not found — fall back to bundled default.
-        if let url = ModelManager.resolvedModelURL(fileName: WhisperModel.defaultModel.fileName) {
+        if let url = ModelManager.resolvedModelURL(fileName: SpeechModel.defaultModel.fileName) {
             return url
         }
         return ResourceLocator.modelURL()

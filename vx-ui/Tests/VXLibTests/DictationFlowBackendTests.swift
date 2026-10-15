@@ -31,25 +31,42 @@ final class DictationFlowBackendTests: XCTestCase {
     }
 
     func testRealBackendTranscribesFixtureAndInsertsText() async throws {
+        try await checkFixture(modelURL: Self.modelURL)
+    }
+
+    private static var parakeetURL: URL {
+        if let path = ProcessInfo.processInfo.environment["VX_PARAKEET_MODEL_PATH"] {
+            return URL(fileURLWithPath: path)
+        }
+        let model = SpeechModel.catalog.first { $0.isParakeet }!
+        return packageDirectory.appendingPathComponent("Resources/Models/\(model.fileName)")
+    }
+
+    func testParakeetTranscribesFixtureAndInsertsText() async throws {
+        try await checkFixture(modelURL: Self.parakeetURL)
+    }
+
+    func testParakeetGoModeInsertsBothUtterances() async throws {
+        try await checkFixture(modelURL: Self.parakeetURL, goMode: true)
+    }
+
+    private func checkFixture(modelURL: URL, goMode: Bool = false) async throws {
         guard ProcessInfo.processInfo.environment["VX_FLOW_BACKEND"] == "1" else {
             throw XCTSkip("Set VX_FLOW_BACKEND=1 to run the real-backend flow test.")
         }
         let backendURL = Self.backendURL
-        let modelURL = Self.modelURL
+        let fixture = goMode ? "two-utterances" : "short-phrase"
         let fm = FileManager.default
-        guard fm.isExecutableFile(atPath: backendURL.path) else {
-            throw XCTSkip("vx-rs not built at \(backendURL.path) — run `cargo build --release`.")
-        }
-        guard fm.fileExists(atPath: modelURL.path) else {
-            throw XCTSkip("Model missing at \(modelURL.path).")
-        }
-        guard Fixtures.exists("short-phrase") else {
-            throw XCTSkip("Fixture short-phrase.wav is missing.")
-        }
+        // Explicit backend runs must fail when resources are missing.
+        XCTAssertTrue(fm.isExecutableFile(atPath: backendURL.path), "Build vx-rs before running backend flow tests.")
+        XCTAssertTrue(fm.fileExists(atPath: modelURL.path), "Missing model at \(modelURL.path)")
+        XCTAssertTrue(Fixtures.exists(fixture))
+        guard fm.isExecutableFile(atPath: backendURL.path),
+              fm.fileExists(atPath: modelURL.path), Fixtures.exists(fixture) else { return }
 
         let relay = DrainRelay()
         let source = WAVFileAudioSource(
-            url: Fixtures.url("short-phrase"),
+            url: Fixtures.url(fixture),
             pacing: .immediate,
             onDrained: { relay.fire() }
         )
@@ -87,18 +104,32 @@ final class DictationFlowBackendTests: XCTestCase {
         flow.delegate = recorder
         relay.onDrain = { [weak flow] in Task { @MainActor in flow?.audioSourceDidDrain() } }
 
-        flow.beginRecording()
-        try await recorder.wait(forEventNamed: "recordingStarted", timeout: 30)
+        if goMode {
+            flow.startGoMode()
+            try await recorder.wait(forEventNamed: "goModeStarted", timeout: 30)
+        } else {
+            flow.beginRecording()
+            try await recorder.wait(forEventNamed: "recordingStarted", timeout: 30)
+        }
         try await recorder.wait(forEventNamed: "audioSourceDrained", timeout: 30)
-        flow.finishRecording()
-        try await recorder.wait(forEventNamed: "textInserted", timeout: 120)
+        if goMode {
+            flow.stopGoMode(finishActive: true)
+            try await recorder.wait(until: { inserter.insertions.count == 2 }, timeout: 120)
+        } else {
+            flow.finishRecording()
+            try await recorder.wait(forEventNamed: "textInserted", timeout: 120)
+        }
         await flow.waitForIdle()
 
-        let inserted = inserter.insertions.first?.text ?? ""
-        XCTAssertTrue(
-            inserted.lowercased().contains("quick brown fox"),
-            "expected the fixture phrase, got \(inserted.debugDescription); events: \(recorder.names)"
-        )
-        XCTAssertEqual(history.entries.first?.text, inserted)
+        func normalized(_ text: String) -> String {
+            text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        let expected = goMode
+            ? ["this is the first sentence", "this is the second sentence"]
+            : ["the quick brown fox jumps over the lazy dog"]
+        XCTAssertEqual(inserter.insertions.map { normalized($0.text) }, expected,
+                       "Unexpected transcript. Events: \(recorder.names)")
+        XCTAssertEqual(history.entries.map(\.text), inserter.insertions.reversed().map(\.text))
     }
 }

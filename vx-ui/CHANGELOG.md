@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.46] - 2026-10-15
+
+### Added
+- Choose the larger, high accuracy Parakeet v3 model alongside Whisper Tiny, Base, and Small in Preferences. Parakeet runs on CPU and requires no GPU.
+- Parakeet model downloads verify a pinned checksum and install only after all model files are complete.
+- Background verification covers Parakeet dictation, Go Mode, long recordings, and switching back to Whisper.
+
+### Fixed
+- Model downloads show an "Installing…" spinner during verification and extraction instead of remaining at 100%.
+- Cold model loads no longer block audio capture. Queued audio drains before transcription finishes.
+- Go Mode keeps transcription, cleanup, and insertion in recording order and prevents concurrent rule-cache writes between Go Mode phrases.
+- Cancelling a model install stops hashing or extraction and keeps retry unavailable until cleanup completes.
+- Backend and flow verification now prepare both models. Full verification includes both speech engines.
+
 ## [v1.0.45] - 2026-09-08
 
 ### Fixed

@@ -3,7 +3,7 @@ import Foundation
 /// Segments continuous 16 kHz mono f32 microphone audio into utterances for Go mode.
 ///
 /// The audio callback only enqueues work; all thresholding and subprocess writes happen on
-/// a private serial queue so microphone capture never has to wait for Whisper process setup.
+/// a private serial queue so microphone capture never has to wait for speech process setup.
 final class GoModeSegmenter {
     private enum State {
         case idle
@@ -29,6 +29,7 @@ final class GoModeSegmenter {
     private var activeSampleCount = 0
     private var silenceSampleCount = 0
     private var isStopped = false
+    private var lastDelivery: Task<Void, Never>?
 
     init(
         transcriber: Transcriber,
@@ -68,8 +69,10 @@ final class GoModeSegmenter {
 
         switch state {
         case .idle:
-            appendPreRoll(samples)
-            guard rms >= startThreshold else { return }
+            guard rms >= startThreshold else {
+                appendPreRoll(samples)
+                return
+            }
             do {
                 let session = try transcriber.begin(model: modelURL)
                 activeSession = session
@@ -133,18 +136,20 @@ final class GoModeSegmenter {
         }
         resetSegment()
 
-        Task.detached { [onTranscript, onFailure] in
-            do {
-                let text = try await session.finish()
-                DispatchQueue.main.async {
-                    onTranscript(text)
-                }
-            } catch is CancellationError {
+        let previous = lastDelivery
+        lastDelivery = Task.detached { [onTranscript, onFailure] in
+            let result: Result<String, Error>
+            do { result = .success(try await session.finish()) }
+            catch { result = .failure(error) }
+            // Inference may finish out of order, but phrases must retain recording order.
+            await previous?.value
+            switch result {
+            case .success(let text):
+                DispatchQueue.main.async { onTranscript(text) }
+            case .failure(is CancellationError):
                 vxLog("[go-mode/segmenter] Segment cancelled")
-            } catch {
-                DispatchQueue.main.async {
-                    onFailure(error)
-                }
+            case .failure(let error):
+                DispatchQueue.main.async { onFailure(error) }
             }
         }
     }

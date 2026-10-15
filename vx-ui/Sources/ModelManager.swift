@@ -1,11 +1,11 @@
 import Foundation
 import Combine
 
-// MARK: - Install state
-
 public enum ModelInstallState: Equatable {
     case notInstalled
     case downloading(progress: Double)
+    case installing
+    case cancelling
     case installed
     case failed(String)
 
@@ -13,183 +13,149 @@ public enum ModelInstallState: Equatable {
         if case .installed = self { return true }
         return false
     }
-
     public var isDownloading: Bool {
         if case .downloading = self { return true }
         return false
     }
-
     public var downloadProgress: Double? {
-        if case .downloading(let p) = self { return p }
+        if case .downloading(let value) = self { return value }
         return nil
     }
 }
 
-// MARK: - Manager
-
-/// Tracks install state for all catalog models and manages downloads.
-/// All @Published mutations happen on the main queue.
+/// Model state belongs to the main queue. Downloads and archive installation run
+/// off that queue so model management does not block dictation or Preferences.
 public final class ModelManager: ObservableObject {
     public static let shared = ModelManager()
-
     @Published public private(set) var states: [String: ModelInstallState] = [:]
+    private var downloads: [String: Download] = [:]
 
-    private var downloadTasks: [String: URLSessionDownloadTask] = [:]
-    private var progressObservations: [String: NSKeyValueObservation] = [:]
+    private let session: URLSession
 
-    private init() {
+    init(session: URLSession = .shared) {
+        self.session = session
         refreshInstalledStates()
     }
 
-    // MARK: - Resolution
-
-    /// Resolves the URL for a model file, checking (in order):
-    /// 1. User models directory (~/Library/Application Support/vx/Models/)
-    /// 2. App bundle (Contents/Resources/Models/)
-    /// 3. Workspace-relative path (for `swift run` development)
     public static func resolvedModelURL(fileName: String) -> URL? {
-        let fm = FileManager.default
-
-        let userURL = userModelsDirectoryURL().appendingPathComponent(fileName)
-        if fm.fileExists(atPath: userURL.path) {
-            return userURL
-        }
-
-        let resourceName = (fileName as NSString).deletingPathExtension
-        if let bundleURL = Bundle.main.url(
-            forResource: resourceName,
-            withExtension: "bin",
-            subdirectory: "Models"
-        ) {
-            return bundleURL
-        }
-
-        let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
-        let workspaceURL = cwd
-            .appendingPathComponent("Resources/Models")
-            .appendingPathComponent(fileName)
-        if fm.fileExists(atPath: workspaceURL.path) {
-            return workspaceURL
-        }
-
-        return nil
+        guard let model = SpeechModel.catalog.first(where: { $0.fileName == fileName }) else { return nil }
+        return modelLocations(fileName: fileName).first { model.isComplete(at: $0) }
     }
 
-    /// The directory where downloaded models are stored.
+    private static func modelLocations(fileName: String) -> [URL] {
+        var locations = [userModelsDirectoryURL().appendingPathComponent(fileName)]
+        if let resources = Bundle.main.resourceURL {
+            locations.append(resources.appendingPathComponent("Models/\(fileName)"))
+        }
+        // Support both `swift run` from vx-ui and verification from the workspace root.
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        locations.append(cwd.appendingPathComponent("Resources/Models/\(fileName)"))
+        locations.append(cwd.appendingPathComponent("app/vx-ui/Resources/Models/\(fileName)"))
+        return locations
+    }
+
     public static func userModelsDirectoryURL() -> URL {
         RuntimeProfile.current.userModelsDirectory
     }
 
-    // MARK: - State
-
     public func refreshInstalledStates() {
-        for model in WhisperModel.catalog {
-            if case .downloading = states[model.id] { continue }
-            let installed = Self.resolvedModelURL(fileName: model.fileName) != nil
-            DispatchQueue.main.async { self.states[model.id] = installed ? .installed : .notInstalled }
+        for model in SpeechModel.catalog {
+            if downloads[model.id] != nil { continue }
+            states[model.id] = Self.resolvedModelURL(fileName: model.fileName) == nil ? .notInstalled : .installed
         }
     }
 
-    /// True when the only available copy of this model is in the read-only app bundle.
-    public func isBundledOnly(_ model: WhisperModel) -> Bool {
+    public func isBundledOnly(_ model: SpeechModel) -> Bool {
         let userURL = Self.userModelsDirectoryURL().appendingPathComponent(model.fileName)
-        guard !FileManager.default.fileExists(atPath: userURL.path) else { return false }
-        return Self.resolvedModelURL(fileName: model.fileName) != nil
+        return !model.isComplete(at: userURL) && Self.resolvedModelURL(fileName: model.fileName) != nil
     }
 
-    // MARK: - Download
-
-    public func download(_ model: WhisperModel) {
-        guard downloadTasks[model.id] == nil else { return }
-        guard states[model.id] != .installed else { return }
-
-        let destDir = Self.userModelsDirectoryURL()
-        do {
-            try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
-        } catch {
-            DispatchQueue.main.async {
-                self.states[model.id] = .failed("Cannot create models directory: \(error.localizedDescription)")
+    public func download(_ model: SpeechModel) {
+        guard downloads[model.id] == nil, states[model.id] != .installed else { return }
+        let job = Download()
+        downloads[model.id] = job
+        states[model.id] = .downloading(progress: 0)
+        let task = session.downloadTask(with: model.downloadURL) { [weak self] temporary, response, error in
+            // URLSession removes its temporary file when this callback returns.
+            // Install synchronously here, on its background callback queue.
+            let result: Result<Void, Error> = Result {
+                if let error { throw error }
+                guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+                    throw ModelInstaller.InstallError.invalid("The model server could not complete the download. Please retry.")
+                }
+                guard let temporary else { throw ModelInstaller.InstallError.invalid("No model file received.") }
+                DispatchQueue.main.async {
+                    guard let self, self.downloads[model.id] === job, !job.isCancelled else { return }
+                    self.states[model.id] = .installing
+                }
+                try ModelInstaller.install(model, from: temporary, into: Self.userModelsDirectoryURL(), isCancelled: { job.isCancelled })
             }
-            return
-        }
-
-        DispatchQueue.main.async { self.states[model.id] = .downloading(progress: 0) }
-
-        let task = URLSession.shared.downloadTask(with: model.downloadURL) { [weak self] tempURL, _, error in
-            guard let self else { return }
-            let obs = self.progressObservations[model.id]
             DispatchQueue.main.async {
-                obs?.invalidate()
-                self.progressObservations.removeValue(forKey: model.id)
-                self.downloadTasks.removeValue(forKey: model.id)
-
-                if let error {
-                    let nsError = error as NSError
-                    if nsError.code == NSURLErrorCancelled {
-                        self.states[model.id] = .notInstalled
-                    } else {
-                        vxLog("[model/download] Failed for \(model.id): \(error)")
-                        self.states[model.id] = .failed(error.localizedDescription)
-                    }
-                    return
-                }
-
-                guard let tempURL else {
-                    self.states[model.id] = .failed("No file received")
-                    return
-                }
-
-                let destURL = destDir.appendingPathComponent(model.fileName)
-                do {
-                    if FileManager.default.fileExists(atPath: destURL.path) {
-                        try FileManager.default.removeItem(at: destURL)
-                    }
-                    try FileManager.default.moveItem(at: tempURL, to: destURL)
-                    vxLog("[model/download] Installed \(model.id) to \(destURL.path)")
+                guard let self, self.downloads[model.id] === job else { return }
+                job.observation?.invalidate()
+                job.observation = nil
+                job.task = nil
+                self.downloads.removeValue(forKey: model.id)
+                switch result {
+                case .success:
                     self.states[model.id] = .installed
-                } catch {
-                    vxLog("[model/download] Move failed for \(model.id): \(error)")
-                    self.states[model.id] = .failed(error.localizedDescription)
+                    vxLog("[model/download] Installed \(model.id)")
+                case .failure(let error):
+                    self.states[model.id] = job.isCancelled ? .notInstalled : .failed(error.localizedDescription)
+                    vxLog("[model/download] \(model.id): \(error.localizedDescription)")
                 }
             }
         }
-
-        let obs = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
-            guard let self else { return }
+        job.task = task
+        job.observation = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
             let fraction = progress.fractionCompleted
             DispatchQueue.main.async {
-                if case .downloading = self.states[model.id] {
-                    self.states[model.id] = .downloading(progress: fraction)
-                }
+                guard let self, self.downloads[model.id] === job, !job.isCancelled,
+                      case .downloading = self.states[model.id] else { return }
+                // Transfer progress stops at installation. Queued KVO updates
+                // must not replace the spinner during hashing and extraction.
+                self.states[model.id] = fraction >= 1 ? .installing : .downloading(progress: fraction)
             }
         }
-
-        progressObservations[model.id] = obs
-        downloadTasks[model.id] = task
         task.resume()
-        vxLog("[model/download] Started for \(model.id) from \(model.downloadURL)")
+        vxLog("[model/download] Started \(model.id)")
     }
 
-    public func cancelDownload(for model: WhisperModel) {
-        downloadTasks[model.id]?.cancel()
-        progressObservations[model.id]?.invalidate()
-        downloadTasks.removeValue(forKey: model.id)
-        progressObservations.removeValue(forKey: model.id)
-        DispatchQueue.main.async { self.states[model.id] = .notInstalled }
+    public func cancelDownload(for model: SpeechModel) {
+        guard let job = downloads[model.id] else { return }
+        job.cancel()
+        states[model.id] = .cancelling
     }
 
-    // MARK: - Removal
-
-    public func remove(_ model: WhisperModel, activeModelId: String) {
-        guard model.id != activeModelId else { return }
+    public func remove(_ model: SpeechModel, activeModelId: String) {
+        guard model.id != activeModelId, downloads[model.id] == nil else { return }
         let userURL = Self.userModelsDirectoryURL().appendingPathComponent(model.fileName)
         guard FileManager.default.fileExists(atPath: userURL.path) else { return }
         do {
             try FileManager.default.removeItem(at: userURL)
-            DispatchQueue.main.async { self.states[model.id] = .notInstalled }
+            refreshInstalledStates()
             vxLog("[model/remove] Removed \(model.id)")
         } catch {
-            vxLog("[model/remove] Failed to remove \(model.id): \(error)")
+            states[model.id] = .failed(error.localizedDescription)
+            vxLog("[model/remove] \(model.id): \(error)")
+        }
+    }
+
+    private final class Download {
+        var task: URLSessionDownloadTask?
+        var observation: NSKeyValueObservation?
+        private let lock = NSLock()
+        private var cancelled = false
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            lock.unlock()
+            task?.cancel()
         }
     }
 }
