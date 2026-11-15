@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- Parakeet v2 and v3 downloads failed with "Model download checksum does not match". The upstream sherpa-onnx `asr-models` release re-uploaded both archives on 2026-11-07, so the checksums pinned on 2026-10-15 no longer matched. The pinned checksums now match the current archives. Models that are already installed are not affected.
+
 ## [v1.0.47] - 2026-10-15
 
 ### Added

@@ -5,11 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-v3}"
 case "$VERSION" in
   v2)
-    SHA256="157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad"
+    SHA256="6fc4426b54aa549a0019b8a75b8dea59164e71790a37ac56a045ad57f915f714"
     OVERRIDE="${VX_PARAKEET_V2_MODEL_PATH:-}"
     ;;
   v3)
-    SHA256="5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"
+    SHA256="1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9"
     OVERRIDE="${VX_PARAKEET_MODEL_PATH:-}"
     ;;
   *) echo "Usage: $0 [v2|v3]" >&2; exit 1 ;;

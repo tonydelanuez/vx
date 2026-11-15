@@ -93,7 +93,7 @@ extension SpeechModel {
             approximateSizeMB: 482,
             downloadURL: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2")!,
             engine: .parakeet,
-            archiveSHA256: "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad"
+            archiveSHA256: "6fc4426b54aa549a0019b8a75b8dea59164e71790a37ac56a045ad57f915f714"
         ),
         SpeechModel(
             id: "parakeet-tdt-0.6b-v3-int8",
@@ -103,7 +103,7 @@ extension SpeechModel {
             approximateSizeMB: 487,
             downloadURL: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2")!,
             engine: .parakeet,
-            archiveSHA256: "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"
+            archiveSHA256: "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9"
         ),
     ]
 
